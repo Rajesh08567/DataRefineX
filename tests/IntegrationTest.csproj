@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <!-- Standalone test: does not reference UI project -->
+    <UseWPF>false</UseWPF>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>DataRefineX.IntegrationTest</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="MiniExcel" Version="1.34.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\Models\*.cs" LinkBase="Models" />
+    <Compile Include="..\Services\*.cs" LinkBase="Services" />
+  </ItemGroup>
+</Project>

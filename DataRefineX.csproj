@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>DataRefineX</AssemblyName>
+    <RootNamespace>DataRefineX</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\DataRefineX.ico</ApplicationIcon>
+    <Version>1.0.0</Version>
+    <Company>DataRefineX</Company>
+    <Product>DataRefineX</Product>
+    <Description>High-performance Excel email deduplication tool</Description>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>embedded</DebugType>
+    <TrimMode>partial</TrimMode>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MiniExcel" Version="1.34.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\logo-256.png" />
+    <Resource Include="Assets\logo-64.png" />
+    <Resource Include="Assets\DataRefineX.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="tests\**" />
+    <None Remove="tests\**" />
+    <Page Remove="tests\**" />
+    <Compile Remove="publish\**" />
+    <None Remove="publish\**" />
+    <Compile Remove="scripts\**" />
+    <None Remove="scripts\**" />
+  </ItemGroup>
+
+</Project>

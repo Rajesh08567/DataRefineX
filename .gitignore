@@ -1,0 +1,49 @@
+# ---------- .NET build output ----------
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.pdb
+
+# Published single-file EXEs — generated, not source
+publish/
+**/publish/
+
+# ---------- IDE / editor ----------
+.vs/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ---------- OS ----------
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# ---------- NuGet ----------
+*.nupkg
+*.snupkg
+packages/
+.nuget/
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# ---------- MSBuild ----------
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+msbuild.log
+msbuild.err
+msbuild.wrn
+
+# ---------- Temp ----------
+*.tmp
+*.bak
+*.cache
