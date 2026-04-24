@@ -6,21 +6,25 @@ using System.Windows;
 using System.Windows.Threading;
 using DataRefineX.Models;
 using DataRefineX.Services;
+using AppConfig = DataRefineX.AppConfig;
 
 namespace DataRefineX.ViewModels;
 
 public sealed class MainViewModel : INotifyPropertyChanged
 {
     private readonly ExcelProcessor _processor = new();
+    private readonly UpdateService _updateService;
     private readonly Dispatcher _dispatcher;
     private readonly DispatcherTimer _elapsedTimer;
     private DateTime _startedAt;
 
     private CancellationTokenSource? _cts;
+    private CancellationTokenSource? _updateCts;
 
     public MainViewModel()
     {
         _dispatcher = Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
+        _updateService = new UpdateService(AppConfig.UpdateManifestUrl, AppConfig.UpdateHttpTimeout);
 
         Files = new ObservableCollection<FileItem>();
         Logs = new ObservableCollection<LogEntry>();
@@ -38,6 +42,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             if (param is FileItem f && !IsProcessing) Files.Remove(f);
         }, param => param is FileItem && !IsProcessing);
+
+        UpdateNowCommand = new RelayCommand(
+            async _ => await DownloadAndApplyUpdateAsync(),
+            _ => UpdateInfo is not null && !IsDownloadingUpdate);
+        DismissUpdateCommand = new RelayCommand(_ =>
+        {
+            UpdateDismissed = true;
+        }, _ => UpdateInfo is not null && !IsDownloadingUpdate);
 
         Files.CollectionChanged += (_, __) =>
         {
@@ -58,6 +70,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
         };
 
         AddLog(LogLevel.Info, "Ready. Drag Excel files into the window or click Browse to begin.");
+
+        // Fire-and-forget update check. Failures are silent.
+        _ = CheckForUpdatesAsync();
     }
 
     public ObservableCollection<FileItem> Files { get; }
@@ -71,6 +86,68 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public RelayCommand OpenOutputCommand { get; }
     public RelayCommand OpenOutputFolderCommand { get; }
     public RelayCommand RemoveFileCommand { get; }
+    public RelayCommand UpdateNowCommand { get; }
+    public RelayCommand DismissUpdateCommand { get; }
+
+    private UpdateInfo? _updateInfo;
+    public UpdateInfo? UpdateInfo
+    {
+        get => _updateInfo;
+        private set
+        {
+            if (_updateInfo == value) return;
+            _updateInfo = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsUpdateBannerVisible));
+            OnPropertyChanged(nameof(UpdateVersionDisplay));
+            UpdateNowCommand.RaiseCanExecuteChanged();
+            DismissUpdateCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    private bool _updateDismissed;
+    public bool UpdateDismissed
+    {
+        get => _updateDismissed;
+        private set
+        {
+            if (_updateDismissed == value) return;
+            _updateDismissed = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsUpdateBannerVisible));
+        }
+    }
+
+    private bool _isDownloadingUpdate;
+    public bool IsDownloadingUpdate
+    {
+        get => _isDownloadingUpdate;
+        private set
+        {
+            if (_isDownloadingUpdate == value) return;
+            _isDownloadingUpdate = value;
+            OnPropertyChanged();
+            UpdateNowCommand.RaiseCanExecuteChanged();
+            DismissUpdateCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    private double _updateProgress;
+    public double UpdateProgress
+    {
+        get => _updateProgress;
+        private set
+        {
+            if (Math.Abs(_updateProgress - value) < 0.01) return;
+            _updateProgress = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public bool IsUpdateBannerVisible => _updateInfo is not null && !_updateDismissed;
+    public string UpdateVersionDisplay => _updateInfo is null
+        ? string.Empty
+        : $"v{_updateInfo.Version}";
 
     public bool HasFiles => Files.Count > 0;
     public bool QueueEmptyHint => Files.Count == 0;
@@ -280,6 +357,65 @@ public sealed class MainViewModel : INotifyPropertyChanged
             Logs.RemoveAt(0);
         }
         ClearCommand.RaiseCanExecuteChanged();
+    }
+
+    // ------------------ Update flow ------------------
+
+    private async Task CheckForUpdatesAsync()
+    {
+        try
+        {
+            await Task.Delay(AppConfig.UpdateCheckDelay);
+            var info = await _updateService.CheckForUpdateAsync();
+            if (info is null) return;
+
+            await _dispatcher.InvokeAsync(() =>
+            {
+                UpdateInfo = info;
+                var notes = string.IsNullOrWhiteSpace(info.ReleaseNotes)
+                    ? ""
+                    : $" — {info.ReleaseNotes}";
+                AddLog(LogLevel.Info, $"Update available: v{info.Version}{notes}");
+            });
+        }
+        catch
+        {
+            // Silent — offline or other issue. User isn't blocked.
+        }
+    }
+
+    private async Task DownloadAndApplyUpdateAsync()
+    {
+        if (UpdateInfo is null || IsDownloadingUpdate) return;
+        var info = UpdateInfo;
+
+        IsDownloadingUpdate = true;
+        UpdateProgress = 0;
+        _updateCts?.Dispose();
+        _updateCts = new CancellationTokenSource();
+
+        try
+        {
+            AddLog(LogLevel.Info, $"Downloading update v{info.Version}...");
+            var progress = new Progress<double>(p => UpdateProgress = p);
+            var downloadedPath = await _updateService.DownloadAsync(info, progress, _updateCts.Token);
+
+            AddLog(LogLevel.Success, "Update downloaded. Restarting to apply...");
+            // Slight delay so the user sees the final state.
+            await Task.Delay(400);
+
+            UpdateInstaller.ApplyAndRestart(downloadedPath);
+            // Application.Current.Shutdown() is called inside ApplyAndRestart.
+        }
+        catch (OperationCanceledException)
+        {
+            AddLog(LogLevel.Warning, "Update cancelled.");
+        }
+        catch (Exception ex)
+        {
+            AddLog(LogLevel.Error, $"Update failed: {ex.Message}");
+            IsDownloadingUpdate = false;
+        }
     }
 
     private void OpenOutput()

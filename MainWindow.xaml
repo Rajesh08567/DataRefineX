@@ -101,14 +101,114 @@
             <Grid Grid.Row="1" Margin="32,14,32,24">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
+                    <!-- Update banner -->
+                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
+                <!-- UPDATE BANNER -->
+                <Border Grid.Row="0"
+                        Margin="0,0,0,16"
+                        Padding="16,12"
+                        CornerRadius="10"
+                        Background="{StaticResource AccentSoftBrush}"
+                        BorderBrush="{StaticResource BorderAccentBrush}"
+                        BorderThickness="1"
+                        Visibility="{Binding IsUpdateBannerVisible, Converter={StaticResource BoolToVisibility}}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <!-- Icon dot -->
+                        <Border Grid.Column="0" Grid.Row="0" Grid.RowSpan="2"
+                                Width="28" Height="28"
+                                CornerRadius="999"
+                                VerticalAlignment="Center"
+                                Margin="0,0,12,0"
+                                Background="{StaticResource AccentGradient}">
+                            <Path Data="M 7,10 L 10,13 L 16,7"
+                                  Stroke="White"
+                                  StrokeThickness="2"
+                                  StrokeStartLineCap="Round"
+                                  StrokeEndLineCap="Round"
+                                  StrokeLineJoin="Round"
+                                  HorizontalAlignment="Center"
+                                  VerticalAlignment="Center" />
+                        </Border>
+
+                        <!-- Text -->
+                        <StackPanel Grid.Column="1" Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Style="{StaticResource BodyText}"
+                                       FontWeight="SemiBold"
+                                       Text="Update available" />
+                            <TextBlock Margin="8,0,0,0"
+                                       Style="{StaticResource BodyText}"
+                                       FontFamily="Consolas, Cascadia Mono"
+                                       Foreground="{StaticResource AccentBrush}"
+                                       FontWeight="SemiBold"
+                                       Text="{Binding UpdateVersionDisplay}" />
+                        </StackPanel>
+                        <TextBlock Grid.Column="1" Grid.Row="1"
+                                   Margin="0,2,0,0"
+                                   Style="{StaticResource SecondaryText}"
+                                   FontSize="12"
+                                   TextTrimming="CharacterEllipsis"
+                                   Text="{Binding UpdateInfo.ReleaseNotes, TargetNullValue='A new version is ready to install.', FallbackValue='A new version is ready to install.'}" />
+
+                        <!-- Actions (static state) -->
+                        <StackPanel Grid.Column="2" Grid.Row="0" Grid.RowSpan="2"
+                                    Orientation="Horizontal"
+                                    VerticalAlignment="Center"
+                                    Visibility="{Binding IsDownloadingUpdate, Converter={StaticResource InvertBoolToVisibility}}">
+                            <Button Style="{StaticResource GhostButton}"
+                                    Padding="10,6" FontSize="12"
+                                    Content="Later"
+                                    Command="{Binding DismissUpdateCommand}" />
+                            <Button Margin="8,0,0,0"
+                                    Style="{StaticResource PrimaryButton}"
+                                    Padding="14,6" FontSize="12"
+                                    Content="Update now"
+                                    Command="{Binding UpdateNowCommand}" />
+                        </StackPanel>
+
+                        <!-- Actions (downloading state) -->
+                        <StackPanel Grid.Column="2" Grid.Row="0" Grid.RowSpan="2"
+                                    Orientation="Horizontal"
+                                    VerticalAlignment="Center"
+                                    MinWidth="220"
+                                    Visibility="{Binding IsDownloadingUpdate, Converter={StaticResource BoolToVisibility}}">
+                            <StackPanel VerticalAlignment="Center" MinWidth="180">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Style="{StaticResource BodyText}"
+                                               FontSize="12"
+                                               Text="Downloading" />
+                                    <TextBlock Margin="6,0,0,0"
+                                               Style="{StaticResource BodyText}"
+                                               FontFamily="Consolas, Cascadia Mono"
+                                               FontSize="12"
+                                               FontWeight="SemiBold"
+                                               Text="{Binding UpdateProgress, StringFormat={}{0:0}%}" />
+                                </StackPanel>
+                                <ProgressBar Margin="0,6,0,0"
+                                             Style="{StaticResource ThinProgressBar}"
+                                             Value="{Binding UpdateProgress, Mode=OneWay}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
                 <!-- HEADER -->
-                <Grid Grid.Row="0" Margin="0,0,0,20">
+                <Grid Grid.Row="1" Margin="0,0,0,20">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
@@ -141,7 +241,7 @@
                 </Grid>
 
                 <!-- DROP ZONE + STATS -->
-                <Grid Grid.Row="1" Margin="0,0,0,20">
+                <Grid Grid.Row="2" Margin="0,0,0,20">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="360" />
@@ -239,7 +339,7 @@
                 </Grid>
 
                 <!-- QUEUE + LOG -->
-                <Grid Grid.Row="2" MinHeight="240">
+                <Grid Grid.Row="3" MinHeight="240">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="360" />
@@ -477,7 +577,7 @@
                 </Grid>
 
                 <!-- PROGRESS -->
-                <Border Grid.Row="3" Margin="0,20,0,0" Style="{StaticResource Card}" Padding="20,14">
+                <Border Grid.Row="4" Margin="0,20,0,0" Style="{StaticResource Card}" Padding="20,14">
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
@@ -510,7 +610,7 @@
                 </Border>
 
                 <!-- ACTIONS -->
-                <Grid Grid.Row="4" Margin="0,16,0,0">
+                <Grid Grid.Row="5" Margin="0,16,0,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />

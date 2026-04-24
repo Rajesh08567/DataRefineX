@@ -1,0 +1,6 @@
+{
+  "version": "1.1.0",
+  "url": "https://github.com/YOUR_USER/DataRefineX/releases/download/v1.1.0/DataRefineX-v1.1.0.exe",
+  "releaseNotes": "Fixes: title bar visibility on small screens, Start button enables only for new files, output columns reordered (name, email, ...). Adds: new logo, automatic update check.",
+  "sha256": ""
+}

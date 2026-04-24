@@ -10,7 +10,9 @@
     <RootNamespace>DataRefineX</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\DataRefineX.ico</ApplicationIcon>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
+    <AssemblyVersion>1.1.0.0</AssemblyVersion>
+    <FileVersion>1.1.0.0</FileVersion>
     <Company>DataRefineX</Company>
     <Product>DataRefineX</Product>
     <Description>High-performance Excel email deduplication tool</Description>
@@ -37,6 +39,18 @@
     <Resource Include="Assets\DataRefineX.ico" />
   </ItemGroup>
 
+  <!-- After publish, rename the EXE to include the version so every release has a
+       unique filename. This prevents Windows from showing a stale icon from its
+       per-path shell cache on end-user machines that had an earlier version. -->
+  <Target Name="VersionedPublishName" AfterTargets="Publish">
+    <PropertyGroup>
+      <_SourceExe>$(PublishDir)$(AssemblyName).exe</_SourceExe>
+      <_TargetExe>$(PublishDir)DataRefineX-v$(Version).exe</_TargetExe>
+    </PropertyGroup>
+    <Move SourceFiles="$(_SourceExe)" DestinationFiles="$(_TargetExe)" Condition="Exists('$(_SourceExe)')" />
+    <Message Importance="high" Text="Published: $(_TargetExe)" />
+  </Target>
+
   <ItemGroup>
     <Compile Remove="tests\**" />
     <None Remove="tests\**" />
@@ -45,6 +59,7 @@
     <None Remove="publish\**" />
     <Compile Remove="scripts\**" />
     <None Remove="scripts\**" />
+    <None Remove="latest.json" />
   </ItemGroup>
 
 </Project>
