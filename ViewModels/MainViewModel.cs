@@ -13,6 +13,7 @@ namespace DataRefineX.ViewModels;
 public sealed class MainViewModel : INotifyPropertyChanged
 {
     private readonly ExcelProcessor _processor = new();
+    private readonly GoogleSheetsService _googleSheets = new();
     private readonly UpdateService _updateService;
     private readonly Dispatcher _dispatcher;
     private readonly DispatcherTimer _elapsedTimer;
@@ -42,6 +43,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             if (param is FileItem f && !IsProcessing) Files.Remove(f);
         }, param => param is FileItem && !IsProcessing);
+
+        AddGoogleSheetCommand = new RelayCommand(
+            async _ => await AddGoogleSheetAsync(),
+            _ => !IsProcessing && !IsFetchingGoogleSheet && !string.IsNullOrWhiteSpace(GoogleSheetUrl));
 
         UpdateNowCommand = new RelayCommand(
             async _ => await DownloadAndApplyUpdateAsync(),
@@ -88,6 +93,70 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public RelayCommand RemoveFileCommand { get; }
     public RelayCommand UpdateNowCommand { get; }
     public RelayCommand DismissUpdateCommand { get; }
+    public RelayCommand AddGoogleSheetCommand { get; }
+
+    private string _googleSheetUrl = "";
+    public string GoogleSheetUrl
+    {
+        get => _googleSheetUrl;
+        set
+        {
+            if (_googleSheetUrl == value) return;
+            _googleSheetUrl = value;
+            OnPropertyChanged();
+            AddGoogleSheetCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    private bool _isFetchingGoogleSheet;
+    public bool IsFetchingGoogleSheet
+    {
+        get => _isFetchingGoogleSheet;
+        private set
+        {
+            if (_isFetchingGoogleSheet == value) return;
+            _isFetchingGoogleSheet = value;
+            OnPropertyChanged();
+            AddGoogleSheetCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    private async Task AddGoogleSheetAsync()
+    {
+        var url = GoogleSheetUrl?.Trim() ?? "";
+        if (string.IsNullOrWhiteSpace(url)) return;
+
+        if (!GoogleSheetsService.TryExtractId(url, out _))
+        {
+            AddLog(LogLevel.Warning, "Not a recognized Google Sheets URL. Expected: https://docs.google.com/spreadsheets/d/<ID>/edit");
+            return;
+        }
+
+        IsFetchingGoogleSheet = true;
+        AddLog(LogLevel.Info, "Downloading Google Sheet (must be shared as 'Anyone with the link')...");
+
+        try
+        {
+            var result = await _googleSheets.DownloadAsync(url);
+            if (!result.Success || result.LocalPath is null)
+            {
+                AddLog(LogLevel.Error, result.ErrorMessage ?? "Download failed.");
+                return;
+            }
+
+            AddFiles(new[] { result.LocalPath });
+            AddLog(LogLevel.Success, $"Added '{result.SuggestedName ?? Path.GetFileName(result.LocalPath)}' from Google Sheets.");
+            GoogleSheetUrl = "";
+        }
+        catch (Exception ex)
+        {
+            AddLog(LogLevel.Error, $"Google Sheets fetch failed: {ex.Message}");
+        }
+        finally
+        {
+            IsFetchingGoogleSheet = false;
+        }
+    }
 
     private UpdateInfo? _updateInfo;
     public UpdateInfo? UpdateInfo
@@ -152,6 +221,28 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool HasFiles => Files.Count > 0;
     public bool QueueEmptyHint => Files.Count == 0;
 
+    public string AppVersionDisplay
+    {
+        get
+        {
+            // Read attributes directly off the assembly — works in single-file published apps,
+            // unlike FileVersionInfo which depends on Assembly.Location (empty when bundled).
+            var asm = typeof(MainViewModel).Assembly;
+            var v = System.Reflection.CustomAttributeExtensions
+                        .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(asm)?.InformationalVersion
+                 ?? System.Reflection.CustomAttributeExtensions
+                        .GetCustomAttribute<System.Reflection.AssemblyFileVersionAttribute>(asm)?.Version
+                 ?? asm.GetName().Version?.ToString()
+                 ?? "1.0";
+            // Strip SourceLink build metadata like '+abc1234'.
+            var plus = v.IndexOf('+');
+            if (plus >= 0) v = v.Substring(0, plus);
+            // Trim a trailing '.0' so 1.1.0.0 → 1.1.0 and 1.1.0 → 1.1.
+            while (v.EndsWith(".0") && v.Count(c => c == '.') > 1) v = v.Substring(0, v.Length - 2);
+            return $"v{v}";
+        }
+    }
+
     private bool _isProcessing;
     public bool IsProcessing
     {
@@ -198,6 +289,236 @@ public sealed class MainViewModel : INotifyPropertyChanged
         private set { if (_isCompleted != value) { _isCompleted = value; OnPropertyChanged(); } }
     }
 
+    // ---------- Sheet selection ----------
+
+    private SheetSelectionMode _sheetMode = SheetSelectionMode.All;
+    public SheetSelectionMode SheetMode
+    {
+        get => _sheetMode;
+        set
+        {
+            if (_sheetMode == value) return;
+            _sheetMode = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsByNameMode));
+            OnPropertyChanged(nameof(IsFirstNMode));
+            _ = RefreshDetectedColumnsAsync();
+        }
+    }
+
+    public bool IsByNameMode => _sheetMode == SheetSelectionMode.ByName;
+    public bool IsFirstNMode => _sheetMode == SheetSelectionMode.FirstN;
+
+    private string _sheetNamesText = "";
+    public string SheetNamesText
+    {
+        get => _sheetNamesText;
+        set { if (_sheetNamesText != value) { _sheetNamesText = value; OnPropertyChanged(); } }
+    }
+
+    private int _firstNSheets = 1;
+    public int FirstNSheets
+    {
+        get => _firstNSheets;
+        set
+        {
+            var clamped = Math.Max(1, value);
+            if (_firstNSheets == clamped) return;
+            _firstNSheets = clamped;
+            OnPropertyChanged();
+        }
+    }
+
+    // ---------- Dedup ----------
+
+    private DedupKeyMode _dedupMode = DedupKeyMode.SingleColumn;
+    public DedupKeyMode DedupMode
+    {
+        get => _dedupMode;
+        set
+        {
+            if (_dedupMode == value) return;
+            _dedupMode = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsSingleColumnDedup));
+            OnPropertyChanged(nameof(IsMultiColumnDedup));
+        }
+    }
+
+    public bool IsSingleColumnDedup => _dedupMode == DedupKeyMode.SingleColumn;
+    public bool IsMultiColumnDedup => _dedupMode == DedupKeyMode.MultipleColumns;
+
+    public ObservableCollection<string> DetectedColumns { get; } = new();
+
+    private string? _dedupColumn;
+    public string? DedupColumn
+    {
+        get => _dedupColumn;
+        set { if (_dedupColumn != value) { _dedupColumn = value; OnPropertyChanged(); } }
+    }
+
+    private string _dedupColumnsText = "";
+    public string DedupColumnsText
+    {
+        get => _dedupColumnsText;
+        set { if (_dedupColumnsText != value) { _dedupColumnsText = value; OnPropertyChanged(); } }
+    }
+
+    private bool _caseSensitive;
+    public bool CaseSensitive
+    {
+        get => _caseSensitive;
+        set { if (_caseSensitive != value) { _caseSensitive = value; OnPropertyChanged(); } }
+    }
+
+    private bool _splitMultiValueCells;
+    public bool SplitMultiValueCells
+    {
+        get => _splitMultiValueCells;
+        set { if (_splitMultiValueCells != value) { _splitMultiValueCells = value; OnPropertyChanged(); } }
+    }
+
+    private string _multiValueDelimiters = "; , |";
+    public string MultiValueDelimiters
+    {
+        get => _multiValueDelimiters;
+        set { if (_multiValueDelimiters != value) { _multiValueDelimiters = value; OnPropertyChanged(); } }
+    }
+
+    // ---------- Validation ----------
+
+    private bool _validateEmail;
+    public bool ValidateEmail
+    {
+        get => _validateEmail;
+        set { if (_validateEmail != value) { _validateEmail = value; OnPropertyChanged(); OnPropertyChanged(nameof(Validation)); } }
+    }
+
+    private bool _validateNotEmpty;
+    public bool ValidateNotEmpty
+    {
+        get => _validateNotEmpty;
+        set { if (_validateNotEmpty != value) { _validateNotEmpty = value; OnPropertyChanged(); OnPropertyChanged(nameof(Validation)); } }
+    }
+
+    public ValidationMode Validation
+    {
+        get
+        {
+            var v = ValidationMode.None;
+            if (ValidateEmail) v |= ValidationMode.Email;
+            if (ValidateNotEmpty) v |= ValidationMode.NotEmpty;
+            return v;
+        }
+    }
+
+    private bool _preserveSourceSheets = true;
+    public bool PreserveSourceSheets
+    {
+        get => _preserveSourceSheets;
+        set { if (_preserveSourceSheets != value) { _preserveSourceSheets = value; OnPropertyChanged(); } }
+    }
+
+    // ---------- Output sheet toggles ----------
+
+    private bool _writeUniqueSheet = true;
+    public bool WriteUniqueSheet
+    {
+        get => _writeUniqueSheet;
+        set { if (_writeUniqueSheet != value) { _writeUniqueSheet = value; OnPropertyChanged(); } }
+    }
+
+    private bool _writeDuplicatesSheet = true;
+    public bool WriteDuplicatesSheet
+    {
+        get => _writeDuplicatesSheet;
+        set { if (_writeDuplicatesSheet != value) { _writeDuplicatesSheet = value; OnPropertyChanged(); } }
+    }
+
+    private bool _writeInvalidSheet = true;
+    public bool WriteInvalidSheet
+    {
+        get => _writeInvalidSheet;
+        set { if (_writeInvalidSheet != value) { _writeInvalidSheet = value; OnPropertyChanged(); } }
+    }
+
+    // ---------- Output format ----------
+
+    private OutputFormat _outputFormat = OutputFormat.Xlsx;
+    public OutputFormat OutputFormat
+    {
+        get => _outputFormat;
+        set { if (_outputFormat != value) { _outputFormat = value; OnPropertyChanged(); } }
+    }
+
+    private OutputDestination _outputDestination = OutputDestination.NewFile;
+    public OutputDestination OutputDestination
+    {
+        get => _outputDestination;
+        set
+        {
+            if (_outputDestination == value) return;
+            _outputDestination = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsInPlace));
+            OnPropertyChanged(nameof(IsNewFile));
+        }
+    }
+
+    public bool IsInPlace => _outputDestination == OutputDestination.InPlace;
+    public bool IsNewFile => _outputDestination == OutputDestination.NewFile;
+
+    private async Task RefreshDetectedColumnsAsync()
+    {
+        if (Files.Count == 0)
+        {
+            DetectedColumns.Clear();
+            return;
+        }
+
+        try
+        {
+            var snapshotFiles = Files.ToList();
+            var scanOptions = new ProcessingOptions
+            {
+                SheetMode = SheetMode,
+                SheetNames = ParseSheetNames(),
+                FirstNSheets = FirstNSheets
+            };
+            var cols = await _processor.ScanHeadersAsync(snapshotFiles, scanOptions);
+
+            await _dispatcher.InvokeAsync(() =>
+            {
+                DetectedColumns.Clear();
+                foreach (var c in cols) DetectedColumns.Add(c);
+                // Auto-fill ONLY when user hasn't picked anything yet — never overwrite a value the user typed.
+                if (string.IsNullOrWhiteSpace(DedupColumn))
+                {
+                    DedupColumn = DetectedColumns.FirstOrDefault();
+                }
+            });
+        }
+        catch
+        {
+            // Header scanning is best-effort — failures shouldn't block the user.
+        }
+    }
+
+    private string[] ParseSheetNames()
+    {
+        if (SheetMode == SheetSelectionMode.ByName)
+        {
+            return SheetNamesText.Split(new[] { ',', ';', '\n', '\r' },
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        }
+        // Legacy mode uses the original DataRefineX sheet names; All/FirstN ignore SheetNames entirely.
+        if (SheetMode == SheetSelectionMode.Default)
+        {
+            return new[] { "Valid+BasicCheck+DEA", "CatchAll_AcceptAll" };
+        }
+        return Array.Empty<string>();
+    }
+
     public void AddFiles(IEnumerable<string> paths)
     {
         foreach (var path in paths)
@@ -206,9 +527,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
             if (!File.Exists(path)) continue;
 
             var ext = Path.GetExtension(path).ToLowerInvariant();
-            if (ext != ".xlsx" && ext != ".xlsm")
+            if (ext != ".xlsx" && ext != ".xlsm" && ext != ".csv")
             {
-                AddLog(LogLevel.Warning, $"Skipping '{Path.GetFileName(path)}' — only .xlsx/.xlsm supported.");
+                AddLog(LogLevel.Warning, $"Skipping '{Path.GetFileName(path)}' — only .xlsx, .xlsm, .csv supported.");
                 continue;
             }
 
@@ -217,6 +538,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             Files.Add(new FileItem(path));
         }
+
+        _ = RefreshDetectedColumnsAsync();
     }
 
     private void ClearAll()
@@ -241,6 +564,29 @@ public sealed class MainViewModel : INotifyPropertyChanged
         var filesToProcess = Files.Where(f => f.Status == FileStatus.Queued).ToList();
         if (filesToProcess.Count == 0) return;
 
+        // Resolve dedup columns and validate config BEFORE flipping into processing state.
+        var dedupColumns = DedupMode switch
+        {
+            DedupKeyMode.SingleColumn => string.IsNullOrWhiteSpace(DedupColumn)
+                ? (DetectedColumns.FirstOrDefault() is { } first ? new[] { first } : Array.Empty<string>())
+                : new[] { DedupColumn! },
+            DedupKeyMode.MultipleColumns => DedupColumnsText.Split(
+                new[] { ',', ';', '\n', '\r' },
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+            _ => Array.Empty<string>()
+        };
+
+        if (DedupMode == DedupKeyMode.SingleColumn && dedupColumns.Length == 0)
+        {
+            AddLog(LogLevel.Warning, "Pick a unique column in the Read panel before processing.");
+            return;
+        }
+        if (DedupMode == DedupKeyMode.MultipleColumns && dedupColumns.Length == 0)
+        {
+            AddLog(LogLevel.Warning, "Multi-column dedup needs at least one column listed.");
+            return;
+        }
+
         IsProcessing = true;
         IsCompleted = false;
         Stats.Reset();
@@ -264,7 +610,23 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         var options = new ProcessingOptions
         {
-            OutputDirectory = Path.GetDirectoryName(filesToProcess[0].FullPath)
+            OutputDirectory = Path.GetDirectoryName(filesToProcess[0].FullPath),
+            SheetMode = SheetMode,
+            SheetNames = ParseSheetNames(),
+            FirstNSheets = FirstNSheets,
+            DedupMode = DedupMode,
+            DedupColumns = dedupColumns,
+            CaseSensitive = CaseSensitive,
+            SplitMultiValueCells = SplitMultiValueCells,
+            MultiValueDelimiters = string.Concat((MultiValueDelimiters ?? "").Where(c => !char.IsWhiteSpace(c))),
+            Validation = Validation,
+            ValidationColumn = dedupColumns.FirstOrDefault() ?? "",
+            WriteUniqueSheet = WriteUniqueSheet,
+            WriteDuplicatesSheet = WriteDuplicatesSheet,
+            WriteInvalidSheet = WriteInvalidSheet,
+            OutputFormat = OutputFormat,
+            Destination = OutputDestination,
+            PreserveSourceSheets = PreserveSourceSheets
         };
 
         try

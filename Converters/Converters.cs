@@ -109,6 +109,24 @@ public sealed class LongToNumberConverter : IValueConverter
         => throw new NotSupportedException();
 }
 
+public sealed class EnumMatchConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (value is null || parameter is null) return false;
+        return string.Equals(value.ToString(), parameter.ToString(), StringComparison.Ordinal);
+    }
+
+    public object ConvertBack(object value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (value is bool b && b && parameter is not null)
+        {
+            return Enum.Parse(targetType, parameter.ToString()!);
+        }
+        return Binding.DoNothing;
+    }
+}
+
 public sealed class NullOrEmptyToVisibilityConverter : IValueConverter
 {
     public bool Invert { get; set; }

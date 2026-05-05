@@ -191,9 +191,9 @@ public partial class MainWindow : Window
         if (Vm.IsProcessing) return;
         var dlg = new OpenFileDialog
         {
-            Filter = "Excel Workbook (*.xlsx;*.xlsm)|*.xlsx;*.xlsm|All files (*.*)|*.*",
+            Filter = "Spreadsheets (*.xlsx;*.xlsm;*.csv)|*.xlsx;*.xlsm;*.csv|Excel Workbook (*.xlsx;*.xlsm)|*.xlsx;*.xlsm|CSV (*.csv)|*.csv|All files (*.*)|*.*",
             Multiselect = true,
-            Title = "Select Excel files"
+            Title = "Select files"
         };
         if (dlg.ShowDialog(this) == true)
         {

@@ -39,6 +39,7 @@
         <conv:LogLevelToBrushConverter x:Key="LogLevelToBrush" />
         <conv:LongToNumberConverter x:Key="LongToNumber" />
         <conv:NullOrEmptyToVisibilityConverter x:Key="NonEmptyToVisibility" />
+        <conv:EnumMatchConverter x:Key="EnumMatch" />
     </Window.Resources>
 
     <Window.DataContext>
@@ -77,7 +78,7 @@
                                VerticalAlignment="Center"
                                FontSize="11"
                                Foreground="{StaticResource TextMutedBrush}"
-                               Text="v1.0" />
+                               Text="{Binding AppVersionDisplay}" />
                 </StackPanel>
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal"
@@ -98,15 +99,29 @@
             </Grid>
 
             <!-- ============= CONTENT ============= -->
-            <Grid Grid.Row="1" Margin="32,14,32,24">
+            <ScrollViewer Grid.Row="1"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          Focusable="False">
+                <ScrollViewer.Resources>
+                    <Style TargetType="ScrollBar" BasedOn="{StaticResource MinimalScrollBar}" />
+                </ScrollViewer.Resources>
+            <Grid Margin="32,14,32,24">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <!-- Update banner -->
                     <RowDefinition Height="Auto" />
+                    <!-- Header -->
                     <RowDefinition Height="Auto" />
-                    <RowDefinition Height="*" />
+                    <!-- Sheet selection -->
                     <RowDefinition Height="Auto" />
+                    <!-- Drop zone + stats -->
                     <RowDefinition Height="Auto" />
+                    <!-- Queue + log -->
+                    <RowDefinition Height="Auto" />
+                    <!-- Progress -->
+                    <RowDefinition Height="Auto" />
+                    <!-- Actions -->
                 </Grid.RowDefinitions>
 
                 <!-- UPDATE BANNER -->
@@ -219,7 +234,7 @@
                         <TextBlock Margin="0,4,0,0"
                                    Style="{StaticResource SecondaryText}"
                                    FontSize="14"
-                                   Text="Clean, merge, and deduplicate Excel email data at scale." />
+                                   Text="Clean, merge, and deduplicate Excel &amp; CSV data — pick any column as the unique key." />
                     </StackPanel>
                     <Border Grid.Column="1"
                             VerticalAlignment="Top"
@@ -240,8 +255,448 @@
                     </Border>
                 </Grid>
 
+                <!-- SETTINGS: collapsible header + two-column Read | Write panels -->
+                <Border Grid.Row="2" Margin="0,0,0,14" Style="{StaticResource Card}" Padding="0"
+                        IsEnabled="{Binding IsProcessing, Converter={StaticResource InverseBool}}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <!-- Header bar with collapse toggle -->
+                        <Grid Grid.Row="0" Margin="20,14,20,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Style="{StaticResource H2Text}" Text="Settings" />
+                                <TextBlock Margin="10,0,0,0"
+                                           VerticalAlignment="Center"
+                                           Style="{StaticResource MutedText}"
+                                           Text="Configure how files are read on the left, and how output is written on the right." />
+                            </StackPanel>
+                            <ToggleButton x:Name="SettingsToggle"
+                                          Grid.Column="1"
+                                          IsChecked="True"
+                                          Cursor="Hand"
+                                          Background="Transparent"
+                                          BorderThickness="0"
+                                          Padding="8,4"
+                                          ToolTip="Show / hide settings to free up space.">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border Background="{TemplateBinding Background}" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="{TemplateBinding Tag}" VerticalAlignment="Center"
+                                                           Style="{StaticResource MutedText}" />
+                                            </StackPanel>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsChecked" Value="True">
+                                                <Setter Property="Tag" Value="▾  Hide" />
+                                            </Trigger>
+                                            <Trigger Property="IsChecked" Value="False">
+                                                <Setter Property="Tag" Value="▸  Show" />
+                                            </Trigger>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter Property="Background" Value="{StaticResource BgHoverBrush}" />
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+                        </Grid>
+
+                        <!-- Two-column body -->
+                        <Grid Grid.Row="1" Margin="20,4,20,18"
+                              Visibility="{Binding ElementName=SettingsToggle, Path=IsChecked, Converter={StaticResource BoolToVisibility}}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="14" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <!-- ============ LEFT: READ ============ -->
+                            <Border Grid.Column="0" Padding="16"
+                                    Background="{StaticResource BgElevatedBrush}"
+                                    BorderBrush="{StaticResource BorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="10">
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Border Width="22" Height="22" CornerRadius="6"
+                                                Background="{StaticResource AccentSoftBrush}">
+                                            <Path Data="M 5,4 L 5,16 L 13,16 M 5,4 L 13,4 L 13,12 L 17,12"
+                                                  Stroke="{StaticResource AccentBrush}"
+                                                  StrokeThickness="1.5"
+                                                  HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center" />
+                                        </Border>
+                                        <TextBlock Margin="10,0,0,0" VerticalAlignment="Center"
+                                                   Style="{StaticResource H2Text}" Text="Read" />
+                                        <TextBlock Margin="8,0,0,0" VerticalAlignment="Center"
+                                                   Style="{StaticResource MutedText}"
+                                                   Text="What goes in" />
+                                    </StackPanel>
+
+                                    <!-- Sheets -->
+                                    <TextBlock Margin="0,14,0,6" Style="{StaticResource LabelText}" Text="WHICH SHEETS" />
+                                    <WrapPanel>
+                                        <RadioButton GroupName="SheetMode" Margin="0,0,16,6"
+                                                     Content="All sheets"
+                                                     ToolTip="Read every sheet in every workbook. Best when you don't know the sheet names ahead of time."
+                                                     IsChecked="{Binding SheetMode, Converter={StaticResource EnumMatch}, ConverterParameter=All, Mode=TwoWay}" />
+                                        <RadioButton GroupName="SheetMode" Margin="0,0,16,6"
+                                                     Content="By name"
+                                                     ToolTip="Only sheets whose names match the list you provide. Supports * wildcards (e.g. Data*, Sheet?)."
+                                                     IsChecked="{Binding SheetMode, Converter={StaticResource EnumMatch}, ConverterParameter=ByName, Mode=TwoWay}" />
+                                        <RadioButton GroupName="SheetMode" Margin="0,0,16,6"
+                                                     Content="First N"
+                                                     ToolTip="Read only the first N sheets of each workbook in tab order."
+                                                     IsChecked="{Binding SheetMode, Converter={StaticResource EnumMatch}, ConverterParameter=FirstN, Mode=TwoWay}" />
+                                        <RadioButton GroupName="SheetMode" Margin="0,0,16,6"
+                                                     Content="Legacy"
+                                                     ToolTip="Original DataRefineX behavior — only reads sheets named 'Valid+BasicCheck+DEA' or 'CatchAll_AcceptAll'."
+                                                     IsChecked="{Binding SheetMode, Converter={StaticResource EnumMatch}, ConverterParameter=Default, Mode=TwoWay}" />
+                                    </WrapPanel>
+
+                                    <StackPanel Margin="0,4,0,0"
+                                                Visibility="{Binding IsByNameMode, Converter={StaticResource BoolToVisibility}}">
+                                        <TextBox FontFamily="Consolas, Cascadia Mono" FontSize="12"
+                                                 ToolTip="Comma-separated names. * matches anything (e.g. Data*, *2024)."
+                                                 Text="{Binding SheetNamesText, UpdateSourceTrigger=LostFocus}" />
+                                        <TextBlock Margin="0,4,0,0" Style="{StaticResource MutedText}"
+                                                   Text="e.g. Sheet1, Data*  •  case-insensitive  •  * = wildcard" />
+                                    </StackPanel>
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0"
+                                                Visibility="{Binding IsFirstNMode, Converter={StaticResource BoolToVisibility}}">
+                                        <TextBlock VerticalAlignment="Center" Style="{StaticResource SecondaryText}" FontSize="12" Text="Read the first" />
+                                        <TextBox Margin="6,0,6,0" Width="56"
+                                                 FontFamily="Consolas, Cascadia Mono" FontSize="12"
+                                                 HorizontalContentAlignment="Center"
+                                                 ToolTip="Number of sheets to read from the start of each workbook."
+                                                 Text="{Binding FirstNSheets, UpdateSourceTrigger=LostFocus}" />
+                                        <TextBlock VerticalAlignment="Center" Style="{StaticResource SecondaryText}" FontSize="12" Text="sheet(s) per file." />
+                                    </StackPanel>
+
+                                    <!-- Dedup key -->
+                                    <TextBlock Margin="0,16,0,6" Style="{StaticResource LabelText}" Text="HOW TO DETECT DUPLICATES" />
+                                    <WrapPanel>
+                                        <RadioButton GroupName="DedupMode" Margin="0,0,16,6"
+                                                     Content="Single column"
+                                                     ToolTip="Most common — pick one column (like 'email' or 'phone') as the unique identifier."
+                                                     IsChecked="{Binding DedupMode, Converter={StaticResource EnumMatch}, ConverterParameter=SingleColumn, Mode=TwoWay}" />
+                                        <RadioButton GroupName="DedupMode" Margin="0,0,16,6"
+                                                     Content="Multiple columns"
+                                                     ToolTip="A row is a duplicate only when ALL listed columns match (e.g. first_name + last_name + phone)."
+                                                     IsChecked="{Binding DedupMode, Converter={StaticResource EnumMatch}, ConverterParameter=MultipleColumns, Mode=TwoWay}" />
+                                        <RadioButton GroupName="DedupMode" Margin="0,0,16,6"
+                                                     Content="Whole row"
+                                                     ToolTip="A row is a duplicate only when every single column matches another row exactly."
+                                                     IsChecked="{Binding DedupMode, Converter={StaticResource EnumMatch}, ConverterParameter=EntireRow, Mode=TwoWay}" />
+                                        <RadioButton GroupName="DedupMode" Margin="0,0,16,6"
+                                                     Content="None"
+                                                     ToolTip="Skip dedup entirely. Use this when you only want validation/cleanup."
+                                                     IsChecked="{Binding DedupMode, Converter={StaticResource EnumMatch}, ConverterParameter=None, Mode=TwoWay}" />
+                                    </WrapPanel>
+
+                                    <!-- Single column picker -->
+                                    <StackPanel Margin="0,4,0,0"
+                                                Visibility="{Binding IsSingleColumnDedup, Converter={StaticResource BoolToVisibility}}">
+                                        <TextBlock Style="{StaticResource SecondaryText}" FontSize="12"
+                                                   Text="Unique column" />
+                                        <ComboBox Margin="0,4,0,0"
+                                                  IsEditable="True" StaysOpenOnEdit="True"
+                                                  ItemsSource="{Binding DetectedColumns}"
+                                                  Text="{Binding DedupColumn, UpdateSourceTrigger=LostFocus}"
+                                                  ToolTip="Pick a column auto-detected from your files, or type any column name. Drop files first to detect columns." />
+                                        <TextBlock Margin="0,4,0,0" Style="{StaticResource MutedText}"
+                                                   Text="Auto-detected from your files. Type a name if it isn't listed." />
+                                    </StackPanel>
+
+                                    <!-- Multi-column input -->
+                                    <StackPanel Margin="0,4,0,0"
+                                                Visibility="{Binding IsMultiColumnDedup, Converter={StaticResource BoolToVisibility}}">
+                                        <TextBlock Style="{StaticResource SecondaryText}" FontSize="12"
+                                                   Text="Columns to combine" />
+                                        <TextBox Margin="0,4,0,0"
+                                                 FontFamily="Consolas, Cascadia Mono" FontSize="12"
+                                                 ToolTip="Comma-separated list. ALL columns must match for two rows to be duplicates."
+                                                 Text="{Binding DedupColumnsText, UpdateSourceTrigger=LostFocus}" />
+                                        <TextBlock Margin="0,4,0,0" Style="{StaticResource MutedText}"
+                                                   Text="e.g. first_name, last_name, phone — match on ALL three" />
+                                    </StackPanel>
+
+                                    <!-- Case sensitivity -->
+                                    <TextBlock Margin="0,16,0,6" Style="{StaticResource LabelText}" Text="MATCHING" />
+                                    <CheckBox Content="Case-sensitive matching"
+                                              ToolTip="OFF (default): 'Foo' and 'foo' are treated as duplicates. Best for emails, names, most text.&#x0a;ON: 'Foo' and 'foo' are different. Use for case-significant IDs, hashes, codes, file paths."
+                                              IsChecked="{Binding CaseSensitive}" />
+
+                                    <!-- Multi-value split -->
+                                    <TextBlock Margin="0,16,0,6" Style="{StaticResource LabelText}" Text="MULTI-VALUE CELLS" />
+                                    <CheckBox Content="Split cells with multiple values into separate rows"
+                                              ToolTip="When ON, a cell like 'a@x.com; b@x.com; c@x.com' becomes 3 rows — each gets its own copy of the other columns. Useful when a single cell holds many emails/values."
+                                              IsChecked="{Binding SplitMultiValueCells}" />
+                                    <Grid Margin="24,6,0,0"
+                                          Visibility="{Binding SplitMultiValueCells, Converter={StaticResource BoolToVisibility}}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,0"
+                                                   Style="{StaticResource SecondaryText}" FontSize="12"
+                                                   Text="Separators:" />
+                                        <TextBox Grid.Column="1"
+                                                 MaxWidth="160" HorizontalAlignment="Left"
+                                                 FontFamily="Consolas, Cascadia Mono" FontSize="12"
+                                                 ToolTip="Each character is treated as a separator. Spaces are ignored. Default: ; , |"
+                                                 Text="{Binding MultiValueDelimiters, UpdateSourceTrigger=LostFocus}" />
+                                    </Grid>
+                                    <TextBlock Margin="24,4,0,0" Style="{StaticResource MutedText}"
+                                               TextWrapping="Wrap"
+                                               Visibility="{Binding SplitMultiValueCells, Converter={StaticResource BoolToVisibility}}"
+                                               Text="Each character above acts as a separator. Only the unique column gets split; other columns are duplicated to each new row." />
+
+                                    <!-- Validation -->
+                                    <TextBlock Margin="0,16,0,6" Style="{StaticResource LabelText}" Text="VALIDATE THE UNIQUE COLUMN" />
+                                    <TextBlock Margin="0,0,0,6" Style="{StaticResource MutedText}"
+                                               Text="Tick any combination — failed rows go to the Invalid bucket. Leave both unticked to skip validation." />
+                                    <WrapPanel>
+                                        <CheckBox Margin="0,0,18,6" Content="Email format"
+                                                  ToolTip="Reject rows where the unique column isn't a valid email address."
+                                                  IsChecked="{Binding ValidateEmail}" />
+                                        <CheckBox Margin="0,0,18,6" Content="Not empty"
+                                                  ToolTip="Reject rows where the unique column is empty or whitespace-only."
+                                                  IsChecked="{Binding ValidateNotEmpty}" />
+                                    </WrapPanel>
+
+                                    <!-- Detected columns summary (fills empty space, useful info) -->
+                                    <Border Margin="0,18,0,0" Padding="12,10"
+                                            Background="{StaticResource BgPressedBrush}"
+                                            CornerRadius="8"
+                                            Visibility="{Binding DetectedColumns.Count, Converter={StaticResource CountToVisibility}}">
+                                        <StackPanel>
+                                            <TextBlock Style="{StaticResource LabelText}"
+                                                       Text="{Binding DetectedColumns.Count, StringFormat='COLUMNS DETECTED IN YOUR FILES ({0})'}" />
+                                            <ItemsControl Margin="0,6,0,0" ItemsSource="{Binding DetectedColumns}">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <WrapPanel />
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Border Margin="0,2,6,2" Padding="8,3"
+                                                                Background="{StaticResource BgElevatedBrush}"
+                                                                BorderBrush="{StaticResource BorderBrush}"
+                                                                BorderThickness="1"
+                                                                CornerRadius="999">
+                                                            <TextBlock FontFamily="Consolas, Cascadia Mono"
+                                                                       FontSize="11"
+                                                                       Foreground="{StaticResource TextSecondaryBrush}"
+                                                                       Text="{Binding}" />
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </StackPanel>
+                                    </Border>
+                                    <TextBlock Margin="0,18,0,0" Style="{StaticResource MutedText}"
+                                               TextWrapping="Wrap"
+                                               Visibility="{Binding DetectedColumns.Count, Converter={StaticResource InvertCountToVisibility}}"
+                                               Text="Drop a file or fetch a Google Sheet to auto-detect columns." />
+                                </StackPanel>
+                            </Border>
+
+                            <!-- ============ RIGHT: WRITE ============ -->
+                            <Border Grid.Column="2" Padding="16"
+                                    Background="{StaticResource BgElevatedBrush}"
+                                    BorderBrush="{StaticResource BorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="10">
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Border Width="22" Height="22" CornerRadius="6"
+                                                Background="{StaticResource AccentSoftBrush}">
+                                            <Path Data="M 5,4 L 13,4 L 17,8 L 17,16 L 5,16 Z M 13,4 L 13,8 L 17,8"
+                                                  Stroke="{StaticResource AccentBrush}"
+                                                  StrokeThickness="1.5"
+                                                  HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center" />
+                                        </Border>
+                                        <TextBlock Margin="10,0,0,0" VerticalAlignment="Center"
+                                                   Style="{StaticResource H2Text}" Text="Write" />
+                                        <TextBlock Margin="8,0,0,0" VerticalAlignment="Center"
+                                                   Style="{StaticResource MutedText}"
+                                                   Text="What comes out" />
+                                    </StackPanel>
+
+                                    <!-- Destination -->
+                                    <TextBlock Margin="0,14,0,6" Style="{StaticResource LabelText}" Text="DESTINATION" />
+                                    <StackPanel>
+                                        <RadioButton GroupName="OutputDest" Margin="0,0,0,6"
+                                                     Content="New file (recommended)"
+                                                     ToolTip="Writes a new 'Processed_*.xlsx/csv' file alongside the source — originals stay untouched."
+                                                     IsChecked="{Binding OutputDestination, Converter={StaticResource EnumMatch}, ConverterParameter=NewFile, Mode=TwoWay}" />
+                                        <RadioButton GroupName="OutputDest" Margin="0,0,0,6"
+                                                     Content="Same file (overwrite source)"
+                                                     ToolTip="DESTRUCTIVE — overwrites each source file with the cleaned data. Each file is dedup'd independently. Make a backup first!"
+                                                     IsChecked="{Binding OutputDestination, Converter={StaticResource EnumMatch}, ConverterParameter=InPlace, Mode=TwoWay}" />
+                                    </StackPanel>
+
+                                    <Border Margin="0,4,0,0" Padding="10,8"
+                                            Background="{StaticResource BgPressedBrush}"
+                                            CornerRadius="6"
+                                            Visibility="{Binding IsInPlace, Converter={StaticResource BoolToVisibility}}">
+                                        <TextBlock Style="{StaticResource MutedText}"
+                                                   TextWrapping="Wrap"
+                                                   Foreground="{StaticResource WarningBrush}"
+                                                   Text="⚠  Source files will be overwritten. Each file is processed independently (dedup is per-file, not across files)." />
+                                    </Border>
+
+                                    <!-- Sheet structure -->
+                                    <TextBlock Margin="0,16,0,6" Style="{StaticResource LabelText}" Text="SHEET STRUCTURE" />
+                                    <StackPanel>
+                                        <CheckBox Margin="0,0,0,6"
+                                                  Content="Keep original sheet names"
+                                                  ToolTip="ON: each input sheet becomes its own output sheet with the same name (deduplicated within itself).&#x0a;OFF: all unique rows merge into a single 'Unique' sheet."
+                                                  IsChecked="{Binding PreserveSourceSheets}" />
+                                        <TextBlock Style="{StaticResource MutedText}" TextWrapping="Wrap"
+                                                   Text="If you upload a workbook with sheets 'Customers' and 'Vendors', the output will keep both names — duplicates are removed inside each sheet independently." />
+                                    </StackPanel>
+
+                                    <!-- Buckets -->
+                                    <TextBlock Margin="0,16,0,6" Style="{StaticResource LabelText}" Text="WHAT TO INCLUDE" />
+                                    <StackPanel>
+                                        <CheckBox Margin="0,0,0,6" Content="Unique rows"
+                                                  ToolTip="The cleaned, deduplicated data — the main output."
+                                                  IsChecked="{Binding WriteUniqueSheet}" />
+                                        <CheckBox Margin="0,0,0,6" Content="Duplicates removed"
+                                                  ToolTip="Rows that were detected as duplicates and dropped. Useful for auditing what was removed."
+                                                  IsChecked="{Binding WriteDuplicatesSheet}" />
+                                        <CheckBox Margin="0,0,0,6" Content="Invalid / empty"
+                                                  ToolTip="Rows that failed validation (bad email, empty key column, etc.)."
+                                                  IsChecked="{Binding WriteInvalidSheet}" />
+                                    </StackPanel>
+
+                                    <!-- Format -->
+                                    <TextBlock Margin="0,16,0,6" Style="{StaticResource LabelText}" Text="FILE FORMAT" />
+                                    <StackPanel Visibility="{Binding IsNewFile, Converter={StaticResource BoolToVisibility}}">
+                                        <RadioButton GroupName="OutputFormat" Margin="0,0,0,6"
+                                                     Content="XLSX — one workbook, multi-sheet"
+                                                     ToolTip="Each enabled bucket becomes a sheet inside one Excel workbook."
+                                                     IsChecked="{Binding OutputFormat, Converter={StaticResource EnumMatch}, ConverterParameter=Xlsx, Mode=TwoWay}" />
+                                        <RadioButton GroupName="OutputFormat" Margin="0,0,0,6"
+                                                     Content="CSV — separate file per bucket"
+                                                     ToolTip="Writes one CSV per enabled bucket (Processed_..._Unique.csv, etc.)."
+                                                     IsChecked="{Binding OutputFormat, Converter={StaticResource EnumMatch}, ConverterParameter=Csv, Mode=TwoWay}" />
+                                    </StackPanel>
+                                    <TextBlock Style="{StaticResource MutedText}"
+                                               TextWrapping="Wrap"
+                                               Visibility="{Binding IsInPlace, Converter={StaticResource BoolToVisibility}}"
+                                               Text="Format follows each source file (.xlsx → xlsx, .csv → csv)." />
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+                    </Grid>
+                </Border>
+
                 <!-- DROP ZONE + STATS -->
-                <Grid Grid.Row="2" Margin="0,0,0,20">
+                <Grid Grid.Row="3" Margin="0,0,0,20">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <!-- Google Sheets URL bar -->
+                    <Border Grid.Row="0" Grid.ColumnSpan="2"
+                            Margin="0,0,0,12"
+                            Padding="14,12"
+                            CornerRadius="10"
+                            Background="{StaticResource BgElevatedBrush}"
+                            BorderBrush="{StaticResource BorderBrush}"
+                            BorderThickness="1">
+                        <StackPanel>
+                            <!-- Title row -->
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                <Border Width="22" Height="22"
+                                        CornerRadius="6"
+                                        Background="{StaticResource AccentSoftBrush}"
+                                        VerticalAlignment="Center">
+                                    <Path Data="M 4,3 L 11,3 L 14,6 L 14,15 L 4,15 Z M 11,3 L 11,6 L 14,6"
+                                          Stroke="{StaticResource AccentBrush}"
+                                          StrokeThickness="1.5"
+                                          HorizontalAlignment="Center"
+                                          VerticalAlignment="Center" />
+                                </Border>
+                                <TextBlock Margin="10,0,0,0" VerticalAlignment="Center"
+                                           Style="{StaticResource H2Text}" FontSize="13"
+                                           Text="Or paste a Google Sheets URL" />
+                                <TextBlock Margin="8,0,0,0" VerticalAlignment="Center"
+                                           Style="{StaticResource MutedText}"
+                                           Text="(must be shared as 'Anyone with the link')" />
+                            </StackPanel>
+
+                            <!-- Input row: textbox + button on one line, equal heights -->
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+
+                                <TextBox Grid.Column="0"
+                                         MinHeight="40"
+                                         Padding="12,10"
+                                         FontFamily="Consolas, Cascadia Mono" FontSize="12"
+                                         VerticalContentAlignment="Center"
+                                         ToolTip="Paste a Google Sheets share link. The whole workbook will be downloaded as .xlsx and added to the queue."
+                                         Text="{Binding GoogleSheetUrl, UpdateSourceTrigger=PropertyChanged}" />
+
+                                <Button Grid.Column="1"
+                                        Margin="10,0,0,0"
+                                        MinHeight="40"
+                                        MinWidth="120"
+                                        Padding="20,8"
+                                        Style="{StaticResource PrimaryButton}"
+                                        Command="{Binding AddGoogleSheetCommand}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Grid Width="14" Height="14" Margin="0,0,8,0"
+                                          Visibility="{Binding IsFetchingGoogleSheet, Converter={StaticResource BoolToVisibility}}">
+                                        <Ellipse Stroke="#66FFFFFF" StrokeThickness="2" />
+                                        <Ellipse Stroke="White" StrokeThickness="2" StrokeDashArray="6 14" RenderTransformOrigin="0.5,0.5">
+                                            <Ellipse.RenderTransform>
+                                                <RotateTransform Angle="0" />
+                                            </Ellipse.RenderTransform>
+                                            <Ellipse.Triggers>
+                                                <EventTrigger RoutedEvent="Ellipse.Loaded">
+                                                    <BeginStoryboard>
+                                                        <Storyboard RepeatBehavior="Forever">
+                                                            <DoubleAnimation Storyboard.TargetProperty="(Ellipse.RenderTransform).(RotateTransform.Angle)"
+                                                                             From="0" To="360" Duration="0:0:1.2" />
+                                                        </Storyboard>
+                                                    </BeginStoryboard>
+                                                </EventTrigger>
+                                            </Ellipse.Triggers>
+                                        </Ellipse>
+                                    </Grid>
+                                    <TextBlock VerticalAlignment="Center"
+                                               Text="Fetching..."
+                                               Visibility="{Binding IsFetchingGoogleSheet, Converter={StaticResource BoolToVisibility}}" />
+                                    <TextBlock VerticalAlignment="Center"
+                                               Text="Fetch"
+                                               Visibility="{Binding IsFetchingGoogleSheet, Converter={StaticResource InvertBoolToVisibility}}" />
+                                </StackPanel>
+                            </Button>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                <!-- Drop zone + stats inner grid -->
+                <Grid Grid.Row="1">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="360" />
@@ -276,11 +731,11 @@
                                            FontSize="15"
                                            FontWeight="SemiBold"
                                            Foreground="{StaticResource TextPrimaryBrush}"
-                                           Text="Drag &amp; drop Excel files here" />
+                                           Text="Drag &amp; drop spreadsheets here" />
                                 <TextBlock Margin="0,4,0,0"
                                            HorizontalAlignment="Center"
                                            Style="{StaticResource SecondaryText}"
-                                           Text="or click to browse  •  .xlsx / .xlsm  •  bulk upload supported" />
+                                           Text="or click to browse  •  .xlsx / .xlsm / .csv  •  bulk upload supported" />
                             </StackPanel>
                         </Grid>
                     </Border>
@@ -337,9 +792,10 @@
                         </Grid>
                     </Border>
                 </Grid>
+                </Grid>
 
                 <!-- QUEUE + LOG -->
-                <Grid Grid.Row="3" MinHeight="240">
+                <Grid Grid.Row="4" Height="280">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="360" />
@@ -577,7 +1033,7 @@
                 </Grid>
 
                 <!-- PROGRESS -->
-                <Border Grid.Row="4" Margin="0,20,0,0" Style="{StaticResource Card}" Padding="20,14">
+                <Border Grid.Row="5" Margin="0,20,0,0" Style="{StaticResource Card}" Padding="20,14">
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
@@ -610,7 +1066,7 @@
                 </Border>
 
                 <!-- ACTIONS -->
-                <Grid Grid.Row="5" Margin="0,16,0,0">
+                <Grid Grid.Row="6" Margin="0,16,0,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
@@ -683,6 +1139,7 @@
                     </StackPanel>
                 </Grid>
             </Grid>
+            </ScrollViewer>
         </Grid>
     </Border>
 </Window>
