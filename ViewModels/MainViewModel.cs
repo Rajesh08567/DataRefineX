@@ -511,11 +511,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return SheetNamesText.Split(new[] { ',', ';', '\n', '\r' },
                 StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         }
-        // Legacy mode uses the original DataRefineX sheet names; All/FirstN ignore SheetNames entirely.
-        if (SheetMode == SheetSelectionMode.Default)
-        {
-            return new[] { "Valid+BasicCheck+DEA", "CatchAll_AcceptAll" };
-        }
         return Array.Empty<string>();
     }
 

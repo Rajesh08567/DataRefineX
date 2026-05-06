@@ -21,7 +21,6 @@ public sealed class ProcessingResult
 
 public enum SheetSelectionMode
 {
-    Default,
     All,
     ByName,
     FirstN
@@ -63,8 +62,8 @@ public enum OutputDestination
 
 public sealed class ProcessingOptions
 {
-    public SheetSelectionMode SheetMode { get; init; } = SheetSelectionMode.Default;
-    public string[] SheetNames { get; init; } = { "Valid+BasicCheck+DEA", "CatchAll_AcceptAll" };
+    public SheetSelectionMode SheetMode { get; init; } = SheetSelectionMode.All;
+    public string[] SheetNames { get; init; } = Array.Empty<string>();
     public int FirstNSheets { get; init; } = 1;
 
     public DedupKeyMode DedupMode { get; init; } = DedupKeyMode.SingleColumn;
@@ -199,6 +198,11 @@ public sealed class ExcelProcessor
             var duplicatesPerSheet = new ConcurrentDictionary<string, ConcurrentBag<Dictionary<string, object?>>>(StringComparer.OrdinalIgnoreCase);
             var invalidPerSheet = new ConcurrentDictionary<string, ConcurrentBag<Dictionary<string, object?>>>(StringComparer.OrdinalIgnoreCase);
 
+            // Preserve the order in which sheets are first encountered, so output sheets keep load order.
+            var sheetOrder = new List<string>();
+            var sheetOrderSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var sheetOrderLock = new object();
+
             var parallelOptions = new ParallelOptions
             {
                 MaxDegreeOfParallelism = options.MaxDegreeOfParallelism,
@@ -263,6 +267,11 @@ public sealed class ExcelProcessor
                             : seenKeysGlobal;
 
                         var uniqueBag = uniquePerSheet.GetOrAdd(bucketKey, _ => new ConcurrentBag<Dictionary<string, object?>>());
+
+                        lock (sheetOrderLock)
+                        {
+                            if (sheetOrderSet.Add(bucketKey)) sheetOrder.Add(bucketKey);
+                        }
 
                         await Task.Run(() =>
                         {
@@ -388,28 +397,29 @@ public sealed class ExcelProcessor
                 finalColumns = new List<string>(columnOrder);
             }
 
-            // Move dedup columns to the front of the output for readability.
-            foreach (var col in Enumerable.Reverse(options.DedupColumns))
-            {
-                var existing = FindColumn(finalColumns, col);
-                if (existing is null) continue;
-                finalColumns.Remove(existing);
-                finalColumns.Insert(0, existing);
-            }
-
             var totalUnique = CountAllRows(uniquePerSheet);
             log(LogLevel.Info, $"Accepted {totalUnique:N0} unique rows across {uniquePerSheet.Count} sheet(s) • {duplicatesRemoved:N0} duplicates • {invalidRemoved:N0} invalid. Writing output...");
+
+            List<string> orderedKeysForLog;
+            lock (sheetOrderLock)
+            {
+                orderedKeysForLog = new List<string>(sheetOrder);
+            }
 
             if (invalidRemoved > 0)
             {
                 var perSheet = string.Join(", ",
-                    invalidPerSheet.Select(kv => $"{kv.Key}={kv.Value.Count}"));
+                    orderedKeysForLog
+                        .Where(k => invalidPerSheet.ContainsKey(k))
+                        .Select(k => $"{k}={invalidPerSheet[k].Count}"));
                 log(LogLevel.Info, $"Invalid rows by sheet: {perSheet}");
             }
             if (duplicatesRemoved > 0)
             {
                 var perSheet = string.Join(", ",
-                    duplicatesPerSheet.Select(kv => $"{kv.Key}={kv.Value.Count}"));
+                    orderedKeysForLog
+                        .Where(k => duplicatesPerSheet.ContainsKey(k))
+                        .Select(k => $"{k}={duplicatesPerSheet[k].Count}"));
                 log(LogLevel.Info, $"Duplicate rows by sheet: {perSheet}");
             }
 
@@ -445,6 +455,14 @@ public sealed class ExcelProcessor
                 var srcExt = isInPlace ? Path.GetExtension(files[0].FullPath).ToLowerInvariant() : "";
                 var writeAsCsv = isInPlace ? srcExt == ".csv" : options.OutputFormat == OutputFormat.Csv;
 
+                List<string> orderedSheetKeys;
+                lock (sheetOrderLock)
+                {
+                    orderedSheetKeys = sheetOrder
+                        .Where(k => uniquePerSheet.ContainsKey(k))
+                        .ToList();
+                }
+
                 if (writeAsCsv)
                 {
                     // CSV is single-table per file. With preserved sheets, each input sheet becomes its own csv file.
@@ -460,8 +478,9 @@ public sealed class ExcelProcessor
                         }
                         else
                         {
-                            foreach (var (sheetName, bag) in uniquePerSheet)
+                            foreach (var sheetName in orderedSheetKeys)
                             {
+                                if (!uniquePerSheet.TryGetValue(sheetName, out var bag)) continue;
                                 var path = uniquePerSheet.Count > 1
                                     ? $"{basePath}_{SanitizeFilename(sheetName)}.csv"
                                     : (options.WriteDuplicatesSheet || options.WriteInvalidSheet
@@ -475,14 +494,14 @@ public sealed class ExcelProcessor
                     }
                     if (options.WriteDuplicatesSheet)
                     {
-                        var mergedDup = FlattenWithSource(duplicatesPerSheet);
+                        var mergedDup = FlattenWithSource(duplicatesPerSheet, orderedSheetKeys);
                         MiniExcel.SaveAs($"{basePath}_{options.DuplicatesSheetName}.csv",
                             NormalizeRowsWithSource(mergedDup, finalColumns),
                             excelType: MiniExcelLibs.ExcelType.CSV, overwriteFile: true);
                     }
                     if (options.WriteInvalidSheet)
                     {
-                        var mergedInv = FlattenWithSource(invalidPerSheet);
+                        var mergedInv = FlattenWithSource(invalidPerSheet, orderedSheetKeys);
                         MiniExcel.SaveAs($"{basePath}_{options.InvalidSheetName}.csv",
                             NormalizeRowsWithSource(mergedInv, finalColumns, includeReason: true),
                             excelType: MiniExcelLibs.ExcelType.CSV, overwriteFile: true);
@@ -496,17 +515,20 @@ public sealed class ExcelProcessor
                     {
                         if (options.PreserveSourceSheets && uniquePerSheet.Count > 0)
                         {
-                            // One output sheet per input sheet, with the original name.
-                            foreach (var (sheetName, bag) in uniquePerSheet)
+                            // One output sheet per input sheet, in the order they were loaded.
+                            foreach (var sheetName in orderedSheetKeys)
                             {
+                                if (!uniquePerSheet.TryGetValue(sheetName, out var bag)) continue;
                                 var safeName = SanitizeSheetName(sheetName, sheets.Keys);
                                 sheets[safeName] = NormalizeRows(bag, finalColumns).ToList();
                             }
                         }
                         else
                         {
-                            // Merge everything into one sheet.
-                            var merged = uniquePerSheet.Values.SelectMany(b => b);
+                            // Merge everything into one sheet — preserve load order across sheets.
+                            var merged = orderedSheetKeys
+                                .Where(k => uniquePerSheet.ContainsKey(k))
+                                .SelectMany(k => uniquePerSheet[k]);
                             sheets[options.UniqueSheetName] = NormalizeRows(merged, finalColumns).ToList();
                         }
                     }
@@ -516,19 +538,21 @@ public sealed class ExcelProcessor
                     // Invalid sheet additionally gets a "_Reason" column explaining why each row was rejected.
                     if (options.WriteDuplicatesSheet)
                     {
-                        var mergedDup = FlattenWithSource(duplicatesPerSheet);
+                        var mergedDup = FlattenWithSource(duplicatesPerSheet, orderedSheetKeys);
                         sheets[options.DuplicatesSheetName] = NormalizeRowsWithSource(mergedDup, finalColumns);
                     }
 
                     if (options.WriteInvalidSheet)
                     {
-                        var mergedInv = FlattenWithSource(invalidPerSheet);
+                        var mergedInv = FlattenWithSource(invalidPerSheet, orderedSheetKeys);
                         sheets[options.InvalidSheetName] = NormalizeRowsWithSource(mergedInv, finalColumns, includeReason: true);
                     }
 
                     if (sheets.Count == 0)
                     {
-                        var merged = uniquePerSheet.Values.SelectMany(b => b);
+                        var merged = orderedSheetKeys
+                            .Where(k => uniquePerSheet.ContainsKey(k))
+                            .SelectMany(k => uniquePerSheet[k]);
                         sheets[options.UniqueSheetName] = NormalizeRows(merged, finalColumns).ToList();
                     }
 
@@ -543,7 +567,9 @@ public sealed class ExcelProcessor
             if (uniquePerSheet.Count > 1 && options.PreserveSourceSheets)
             {
                 var sheetSummary = string.Join(", ",
-                    uniquePerSheet.Select(kv => $"{kv.Key} ({kv.Value.Count:N0})"));
+                    orderedKeysForLog
+                        .Where(k => uniquePerSheet.ContainsKey(k))
+                        .Select(k => $"{k} ({uniquePerSheet[k].Count:N0})"));
                 log(LogLevel.Info, $"Output sheets: {sheetSummary}");
             }
 
@@ -777,14 +803,23 @@ public sealed class ExcelProcessor
     }
 
     private static IEnumerable<(string Source, Dictionary<string, object?> Row)> FlattenWithSource(
-        ConcurrentDictionary<string, ConcurrentBag<Dictionary<string, object?>>> bucket)
+        ConcurrentDictionary<string, ConcurrentBag<Dictionary<string, object?>>> bucket,
+        IReadOnlyList<string> orderedKeys)
     {
+        // First, emit rows in the canonical load order.
+        var emitted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var key in orderedKeys)
+        {
+            if (!bucket.TryGetValue(key, out var bag)) continue;
+            emitted.Add(key);
+            foreach (var row in bag) yield return (key, row);
+        }
+
+        // Any keys that exist in the bucket but not in orderedKeys (shouldn't normally happen) — emit last.
         foreach (var (sheetName, bag) in bucket)
         {
-            foreach (var row in bag)
-            {
-                yield return (sheetName, row);
-            }
+            if (emitted.Contains(sheetName)) continue;
+            foreach (var row in bag) yield return (sheetName, row);
         }
     }
 
@@ -880,15 +915,6 @@ public sealed class ExcelProcessor
             totalRowsRead, duplicatesRemoved, invalidRemoved, validRecords, pct);
     }
 
-    private static string? FindColumn(IReadOnlyList<string> columns, string preferredName)
-    {
-        if (string.IsNullOrEmpty(preferredName)) return null;
-        var exact = columns.FirstOrDefault(c => string.Equals(c, preferredName, StringComparison.OrdinalIgnoreCase));
-        if (exact is not null) return exact;
-        return columns.FirstOrDefault(c =>
-            c is not null && c.IndexOf(preferredName, StringComparison.OrdinalIgnoreCase) >= 0);
-    }
-
     private static bool IsCsvFile(string path)
         => string.Equals(Path.GetExtension(path), ".csv", StringComparison.OrdinalIgnoreCase);
 
@@ -918,6 +944,7 @@ public sealed class ExcelProcessor
             }
 
             case SheetSelectionMode.ByName:
+            default:
             {
                 var picks = options.SheetNames ?? Array.Empty<string>();
                 if (picks.Length == 0) return new List<string>();
@@ -938,12 +965,6 @@ public sealed class ExcelProcessor
                 }
                 return matched;
             }
-
-            case SheetSelectionMode.Default:
-            default:
-                return (options.SheetNames ?? Array.Empty<string>())
-                    .Where(s => sheetsInFile.Contains(s, StringComparer.OrdinalIgnoreCase))
-                    .ToList();
         }
     }
 

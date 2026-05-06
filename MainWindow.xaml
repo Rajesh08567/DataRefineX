@@ -356,10 +356,6 @@
                                                      Content="First N"
                                                      ToolTip="Read only the first N sheets of each workbook in tab order."
                                                      IsChecked="{Binding SheetMode, Converter={StaticResource EnumMatch}, ConverterParameter=FirstN, Mode=TwoWay}" />
-                                        <RadioButton GroupName="SheetMode" Margin="0,0,16,6"
-                                                     Content="Legacy"
-                                                     ToolTip="Original DataRefineX behavior — only reads sheets named 'Valid+BasicCheck+DEA' or 'CatchAll_AcceptAll'."
-                                                     IsChecked="{Binding SheetMode, Converter={StaticResource EnumMatch}, ConverterParameter=Default, Mode=TwoWay}" />
                                     </WrapPanel>
 
                                     <StackPanel Margin="0,4,0,0"
