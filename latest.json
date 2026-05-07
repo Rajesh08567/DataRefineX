@@ -1,6 +1,6 @@
 {
-  "version": "1.1.0",
-  "url": "https://github.com/YOUR_USER/DataRefineX/releases/download/v1.1.0/DataRefineX-v1.1.0.exe",
-  "releaseNotes": "Fixes: title bar visibility on small screens, Start button enables only for new files, output columns reordered (name, email, ...). Adds: new logo, automatic update check.",
-  "sha256": ""
+  "version": "1.2.0",
+  "url": "https://github.com/Rajesh08567/DataRefineX/releases/download/v1.2.0/DataRefineX-v1.2.0.exe",
+  "releaseNotes": "New: 'Don't split / Per sheet / Merged sheets / Separate files' output splitting with configurable rows-per-chunk. New: global dedup across all files & sheets, plus a 'GapReport' sheet listing every key with its source files and which files were missing it. UX: warnings for incompatible option combos (Global + In-place, Split + In-place, Gap report without dedup). Removed legacy sheet-name preset.",
+  "sha256": "245dc6bbcd7fcfe076765a35cc7d35d6eb06c0850128eea787321fb652a8e61c"
 }
