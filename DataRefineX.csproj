@@ -10,9 +10,9 @@
     <RootNamespace>DataRefineX</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\DataRefineX.ico</ApplicationIcon>
-    <Version>1.2.1</Version>
-    <AssemblyVersion>1.2.1.0</AssemblyVersion>
-    <FileVersion>1.2.1.0</FileVersion>
+    <Version>1.2.3</Version>
+    <AssemblyVersion>1.2.3.0</AssemblyVersion>
+    <FileVersion>1.2.3.0</FileVersion>
     <Company>DataRefineX</Company>
     <Product>DataRefineX</Product>
     <Description>High-performance Excel email deduplication tool</Description>

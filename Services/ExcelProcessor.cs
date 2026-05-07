@@ -72,14 +72,6 @@ public enum SplitMode
     SeparateFiles
 }
 
-public enum DedupScope
-{
-    /// <summary>Dedup within each source sheet independently (default — preserves per-sheet structure).</summary>
-    PerSheet,
-    /// <summary>Dedup globally — a key seen anywhere in any file/sheet only appears once. Useful for merging multiple lists.</summary>
-    Global
-}
-
 public sealed class ProcessingOptions
 {
     public SheetSelectionMode SheetMode { get; init; } = SheetSelectionMode.All;
@@ -119,13 +111,6 @@ public sealed class ProcessingOptions
     public SplitMode SplitMode { get; init; } = SplitMode.None;
     /// <summary>Max rows per output chunk when SplitMode != None. Min 1, default 10000.</summary>
     public int SplitSize { get; init; } = 10_000;
-
-    /// <summary>Dedup scope — per-sheet (default) or global across all files+sheets.</summary>
-    public DedupScope DedupScope { get; init; } = DedupScope.PerSheet;
-
-    /// <summary>When true (and DedupScope=Global), emit an extra 'GapReport' sheet listing each unique key and the source files/sheets it appeared in.</summary>
-    public bool WriteGapReport { get; init; } = false;
-    public string GapReportSheetName { get; init; } = "GapReport";
 }
 
 public sealed class ExcelProcessor
@@ -144,18 +129,7 @@ public sealed class ExcelProcessor
         Action<LogLevel, string> log,
         CancellationToken cancellationToken)
     {
-        // Global dedup needs ONE shared key set across every file — per-file processing would defeat the purpose.
-        // So global+in-place+multi-file falls back to combined processing (single merged output) and warns.
-        if (options.DedupScope == DedupScope.Global
-            && options.Destination == OutputDestination.InPlace
-            && files.Count > 1)
-        {
-            log(LogLevel.Warning,
-                "Global dedup is incompatible with 'Same file (overwrite source)' for multiple files — switching to a single combined output instead. Source files are NOT modified.");
-            return await ProcessCombinedAsync(files, options, progress, log, cancellationToken);
-        }
-
-        // In-place writes (per-sheet scope) operate per-file — dedup within each file independently.
+        // In-place writes operate per-file (dedup within each file independently).
         if (options.Destination == OutputDestination.InPlace && files.Count > 1)
         {
             return await ProcessPerFileAsync(files, options, progress, log, cancellationToken);
@@ -221,14 +195,10 @@ public sealed class ExcelProcessor
             }
 
             log(LogLevel.Info, $"Starting processing of {files.Count} file(s) with {options.MaxDegreeOfParallelism} workers.");
-            log(LogLevel.Info, $"Sheet mode: {options.SheetMode} • Dedup: {DescribeDedup(options)} • Scope: {options.DedupScope} • Validation: {options.Validation}");
+            log(LogLevel.Info, $"Sheet mode: {options.SheetMode} • Dedup: {DescribeDedup(options)} • Validation: {options.Validation}");
             if (options.SplitMode != SplitMode.None)
             {
                 log(LogLevel.Info, $"Output split: {options.SplitMode} every {options.SplitSize:N0} rows.");
-            }
-            if (options.DedupScope == DedupScope.Global && options.WriteGapReport)
-            {
-                log(LogLevel.Info, "Gap report enabled — output will include a 'GapReport' sheet showing per-key file presence.");
             }
 
             var totalRowsRead = 0L;
@@ -248,11 +218,6 @@ public sealed class ExcelProcessor
             var uniquePerSheet = new ConcurrentDictionary<string, ConcurrentBag<Dictionary<string, object?>>>(StringComparer.OrdinalIgnoreCase);
             var duplicatesPerSheet = new ConcurrentDictionary<string, ConcurrentBag<Dictionary<string, object?>>>(StringComparer.OrdinalIgnoreCase);
             var invalidPerSheet = new ConcurrentDictionary<string, ConcurrentBag<Dictionary<string, object?>>>(StringComparer.OrdinalIgnoreCase);
-
-            // Gap report: for each unique key, track every (file, sheet) it was seen in.
-            // Only built when DedupScope=Global AND WriteGapReport=true.
-            var keyOccurrences = new ConcurrentDictionary<string, ConcurrentBag<string>>(StringComparer.OrdinalIgnoreCase);
-            var buildGapReport = options.DedupScope == DedupScope.Global && options.WriteGapReport && options.DedupMode != DedupKeyMode.None;
 
             // Preserve the order in which sheets are first encountered, so output sheets keep load order.
             var sheetOrder = new List<string>();
@@ -318,15 +283,9 @@ public sealed class ExcelProcessor
                                 : sheet)
                             : options.UniqueSheetName;
 
-                        // Global dedup forces one shared set across all files+sheets, regardless of PreserveSourceSheets.
-                        var seenForBucket = options.DedupScope == DedupScope.Global
-                            ? seenKeysGlobal
-                            : (options.PreserveSourceSheets
-                                ? seenKeysPerSheet.GetOrAdd(bucketKey, _ => new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase))
-                                : seenKeysGlobal);
-
-                        // Tag for the gap report (e.g. "MyFile.xlsx › Customers").
-                        var occurrenceTag = $"{file.FileName} › {(string.IsNullOrEmpty(sheet) ? Path.GetFileNameWithoutExtension(file.FullPath) : sheet)}";
+                        var seenForBucket = options.PreserveSourceSheets
+                            ? seenKeysPerSheet.GetOrAdd(bucketKey, _ => new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase))
+                            : seenKeysGlobal;
 
                         var uniqueBag = uniquePerSheet.GetOrAdd(bucketKey, _ => new ConcurrentBag<Dictionary<string, object?>>());
 
@@ -399,30 +358,19 @@ public sealed class ExcelProcessor
                                     }
 
                                     // Dedup — empty dedup keys are kept in the unique bag (no dedup applies).
-                                    string? dedupKey = null;
                                     if (options.DedupMode != DedupKeyMode.None)
                                     {
-                                        dedupKey = BuildDedupKey(rowToProcess, options);
-                                        if (!string.IsNullOrEmpty(dedupKey))
+                                        var key = BuildDedupKey(rowToProcess, options);
+                                        if (!string.IsNullOrEmpty(key))
                                         {
-                                            if (!seenForBucket.TryAdd(dedupKey, 0))
+                                            if (!seenForBucket.TryAdd(key, 0))
                                             {
-                                                // Still record the occurrence so the gap report shows EVERY file the key was seen in.
-                                                if (buildGapReport)
-                                                {
-                                                    keyOccurrences.GetOrAdd(dedupKey, _ => new ConcurrentBag<string>()).Add(occurrenceTag);
-                                                }
                                                 Interlocked.Increment(ref duplicatesRemoved);
                                                 var dupBag = duplicatesPerSheet.GetOrAdd(bucketKey, _ => new ConcurrentBag<Dictionary<string, object?>>());
                                                 dupBag.Add(rowToProcess);
                                                 continue;
                                             }
                                         }
-                                    }
-
-                                    if (buildGapReport && !string.IsNullOrEmpty(dedupKey))
-                                    {
-                                        keyOccurrences.GetOrAdd(dedupKey, _ => new ConcurrentBag<string>()).Add(occurrenceTag);
                                     }
 
                                     uniqueBag.Add(rowToProcess);
@@ -543,22 +491,15 @@ public sealed class ExcelProcessor
                 var effectiveSplit = isInPlace ? SplitMode.None : options.SplitMode;
                 var splitSize = Math.Max(1, options.SplitSize);
 
-                // Build the gap report rows once (used by both XLSX and CSV branches).
-                List<Dictionary<string, object?>>? gapRows = null;
-                if (buildGapReport && keyOccurrences.Count > 0)
-                {
-                    gapRows = BuildGapReportRows(keyOccurrences, files);
-                }
-
                 var writeResult = writeAsCsv
                     ? WriteCsvOutput(
                         primaryOutputFile, basePath, options, isInPlace, effectiveSplit, splitSize,
                         uniquePerSheet, duplicatesPerSheet, invalidPerSheet,
-                        orderedSheetKeys, finalColumns, gapRows)
+                        orderedSheetKeys, finalColumns)
                     : WriteXlsxOutput(
                         primaryOutputFile, basePath, options, isInPlace, effectiveSplit, splitSize,
                         uniquePerSheet, duplicatesPerSheet, invalidPerSheet,
-                        orderedSheetKeys, finalColumns, gapRows);
+                        orderedSheetKeys, finalColumns);
 
                 outputFile = writeResult.PrimaryFile;
                 extraOutputFiles.AddRange(writeResult.ExtraFiles);
@@ -1046,41 +987,6 @@ public sealed class ExcelProcessor
         if (chunk.Count > 0) yield return chunk;
     }
 
-    private static List<Dictionary<string, object?>> BuildGapReportRows(
-        ConcurrentDictionary<string, ConcurrentBag<string>> keyOccurrences,
-        IReadOnlyList<FileItem> files)
-    {
-        // Header columns for the gap report:
-        //   Key | OccurrenceCount | Files | MissingFromFiles
-        // Files = comma-separated list of "FileName › Sheet" tags where the key was seen.
-        // MissingFromFiles = files in the input set that DID NOT contain this key (the "gap").
-        var allFileNames = new HashSet<string>(files.Select(f => f.FileName), StringComparer.OrdinalIgnoreCase);
-
-        var rows = new List<Dictionary<string, object?>>(keyOccurrences.Count);
-        foreach (var (key, bag) in keyOccurrences.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase))
-        {
-            var occurrences = bag.ToList();
-            var distinctOccurrences = occurrences.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-            var seenFiles = new HashSet<string>(
-                distinctOccurrences.Select(o =>
-                {
-                    var sep = o.IndexOf(" › ", StringComparison.Ordinal);
-                    return sep > 0 ? o.Substring(0, sep) : o;
-                }),
-                StringComparer.OrdinalIgnoreCase);
-            var missing = allFileNames.Where(f => !seenFiles.Contains(f)).OrderBy(s => s, StringComparer.OrdinalIgnoreCase);
-
-            rows.Add(new Dictionary<string, object?>(StringComparer.Ordinal)
-            {
-                ["Key"] = key,
-                ["OccurrenceCount"] = occurrences.Count,
-                ["Files"] = string.Join("; ", distinctOccurrences.OrderBy(s => s, StringComparer.OrdinalIgnoreCase)),
-                ["MissingFromFiles"] = string.Join("; ", missing)
-            });
-        }
-        return rows;
-    }
-
     private static WriteResult WriteXlsxOutput(
         string primaryOutputFile,
         string basePath,
@@ -1092,8 +998,7 @@ public sealed class ExcelProcessor
         ConcurrentDictionary<string, ConcurrentBag<Dictionary<string, object?>>> duplicatesPerSheet,
         ConcurrentDictionary<string, ConcurrentBag<Dictionary<string, object?>>> invalidPerSheet,
         IReadOnlyList<string> orderedSheetKeys,
-        List<string> finalColumns,
-        List<Dictionary<string, object?>>? gapRows)
+        List<string> finalColumns)
     {
         var extras = new List<string>();
 
@@ -1122,7 +1027,6 @@ public sealed class ExcelProcessor
                 var auditSheets = new Dictionary<string, object>();
                 if (duplicateRows is not null) auditSheets[options.DuplicatesSheetName] = duplicateRows;
                 if (invalidRows is not null) auditSheets[options.InvalidSheetName] = invalidRows;
-                if (gapRows is not null) auditSheets[options.GapReportSheetName] = gapRows;
                 if (auditSheets.Count == 0) auditSheets[options.UniqueSheetName] = new List<Dictionary<string, object?>>();
                 MiniExcel.SaveAs(primaryOutputFile, auditSheets, overwriteFile: true);
                 return new WriteResult(primaryOutputFile, extras);
@@ -1146,12 +1050,11 @@ public sealed class ExcelProcessor
                 {
                     [options.UniqueSheetName] = NormalizeRows(chunks[i], finalColumns).ToList()
                 };
-                // Duplicates / invalid / gap report only in the FIRST file — keeps audit data in one place.
+                // Duplicates / invalid only in the FIRST file — keeps audit data in one place.
                 if (i == 0)
                 {
                     if (duplicateRows is not null) sheets[options.DuplicatesSheetName] = duplicateRows;
                     if (invalidRows is not null) sheets[options.InvalidSheetName] = invalidRows;
-                    if (gapRows is not null) sheets[options.GapReportSheetName] = gapRows;
                 }
 
                 MiniExcel.SaveAs(path, sheets, overwriteFile: true);
@@ -1221,7 +1124,6 @@ public sealed class ExcelProcessor
 
         if (duplicateRows is not null) allSheets[options.DuplicatesSheetName] = duplicateRows;
         if (invalidRows is not null) allSheets[options.InvalidSheetName] = invalidRows;
-        if (gapRows is not null) allSheets[options.GapReportSheetName] = gapRows;
 
         if (allSheets.Count == 0)
         {
@@ -1246,8 +1148,7 @@ public sealed class ExcelProcessor
         ConcurrentDictionary<string, ConcurrentBag<Dictionary<string, object?>>> duplicatesPerSheet,
         ConcurrentDictionary<string, ConcurrentBag<Dictionary<string, object?>>> invalidPerSheet,
         IReadOnlyList<string> orderedSheetKeys,
-        List<string> finalColumns,
-        List<Dictionary<string, object?>>? gapRows)
+        List<string> finalColumns)
     {
         var extras = new List<string>();
         string firstFile = primaryOutputFile;
@@ -1342,13 +1243,6 @@ public sealed class ExcelProcessor
             var mergedInv = FlattenWithSource(invalidPerSheet, orderedSheetKeys);
             MiniExcel.SaveAs(path,
                 NormalizeRowsWithSource(mergedInv, finalColumns, includeReason: true),
-                excelType: MiniExcelLibs.ExcelType.CSV, overwriteFile: true);
-            Track(path);
-        }
-        if (gapRows is not null)
-        {
-            var path = $"{basePath}_{options.GapReportSheetName}.csv";
-            MiniExcel.SaveAs(path, gapRows,
                 excelType: MiniExcelLibs.ExcelType.CSV, overwriteFile: true);
             Track(path);
         }

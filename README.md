@@ -14,8 +14,6 @@ Built with WPF on .NET 8 and [MiniExcel](https://github.com/mini-software/MiniEx
 - **Validation** — drop rows where the unique column is empty or isn't a valid email.
 - **Three output buckets** — Unique, Duplicates, and Invalid. Toggle each independently.
 - **Preserve original sheet structure** — output keeps the source sheet names and tab order, dedup'd within each sheet.
-- **Per-sheet OR global dedup** — per-sheet (default) or global across every file & sheet (one shared key set — perfect for merging multiple lists with no cross-file duplicates).
-- **Gap report** — when global dedup is on, optionally generate a `GapReport` sheet showing every key, the files/sheets it appeared in, and which files were *missing* it.
 - **Output splitting** — split very large outputs four ways: don't split, split each sheet at N rows, merge all unique rows then split into sheets of N, or merge and split into separate files of N.
 - **Output as XLSX or CSV** — multi-sheet workbook, or one CSV per bucket.
 - **In-place mode** — overwrite each source file with cleaned data (per-file dedup, originals replaced).
@@ -42,8 +40,6 @@ Built with WPF on .NET 8 and [MiniExcel](https://github.com/mini-software/MiniEx
 | Case-sensitive matching | checkbox | Off by default — `Foo` and `foo` are duplicates. Enable for hashes / IDs. |
 | Split multi-value cells | checkbox + delimiters | Each character in the delimiter box is a separator. Spaces ignored. |
 | Validate the unique column | `Email format`, `Not empty` | Failed rows go to the Invalid bucket. |
-| Dedup scope | `Per sheet`, `Global` | Per-sheet keeps each sheet's duplicates separate. Global treats every file+sheet as one merged list. |
-| Generate gap report | checkbox (Global only) | Adds a `GapReport` sheet listing every unique key with its source files and the files it was missing from. |
 
 ### Write panel
 

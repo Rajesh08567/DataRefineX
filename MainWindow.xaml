@@ -426,30 +426,6 @@
                                                    Text="e.g. first_name, last_name, phone — match on ALL three" />
                                     </StackPanel>
 
-                                    <!-- Dedup scope (per-sheet vs global) — placed right after dedup mode so all dedup options cluster together -->
-                                    <TextBlock Margin="0,16,0,6" Style="{StaticResource LabelText}" Text="DEDUP SCOPE" />
-                                    <StackPanel>
-                                        <RadioButton GroupName="DedupScope" Margin="0,0,0,6"
-                                                     Content="Per sheet (within each file)"
-                                                     ToolTip="Default — duplicates are detected only within the same sheet. Two sheets can both contain 'foo@x.com' and both rows are kept."
-                                                     IsChecked="{Binding DedupScope, Converter={StaticResource EnumMatch}, ConverterParameter=PerSheet, Mode=TwoWay}" />
-                                        <RadioButton GroupName="DedupScope" Margin="0,0,0,6"
-                                                     Content="Global (across all files &amp; sheets)"
-                                                     ToolTip="Use ONE shared key set across every file and sheet. Best for merging multiple lists into one master list with no cross-list duplicates."
-                                                     IsChecked="{Binding DedupScope, Converter={StaticResource EnumMatch}, ConverterParameter=Global, Mode=TwoWay}" />
-                                    </StackPanel>
-                                    <StackPanel Margin="0,4,0,0"
-                                                Visibility="{Binding IsGlobalScope, Converter={StaticResource BoolToVisibility}}">
-                                        <CheckBox Content="Generate gap report (which files contain each key)"
-                                                  ToolTip="Adds a 'GapReport' sheet listing every unique key, the files/sheets it appeared in, and the files where it was MISSING. Great for auditing list overlap."
-                                                  IsChecked="{Binding WriteGapReport}" />
-                                        <TextBlock Margin="24,2,0,0" Style="{StaticResource MutedText}" FontSize="11"
-                                                   TextWrapping="Wrap"
-                                                   Visibility="{Binding GapReportNeedsDedup, Converter={StaticResource BoolToVisibility}}"
-                                                   Foreground="{StaticResource WarningBrush}"
-                                                   Text="⚠ Gap report needs a dedup column — set 'How to detect duplicates' to anything other than None." />
-                                    </StackPanel>
-
                                     <!-- Case sensitivity -->
                                     <TextBlock Margin="0,16,0,6" Style="{StaticResource LabelText}" Text="MATCHING" />
                                     <CheckBox Content="Case-sensitive matching"
@@ -577,16 +553,6 @@
                                                    Foreground="{StaticResource WarningBrush}"
                                                    Text="⚠  Source files will be overwritten. Each file is processed independently (dedup is per-file, not across files)." />
                                     </Border>
-                                    <Border Margin="0,4,0,0" Padding="10,8"
-                                            Background="{StaticResource BgPressedBrush}"
-                                            CornerRadius="6"
-                                            Visibility="{Binding GlobalIncompatibleWithInPlace, Converter={StaticResource BoolToVisibility}}">
-                                        <TextBlock Style="{StaticResource MutedText}"
-                                                   TextWrapping="Wrap"
-                                                   Foreground="{StaticResource WarningBrush}"
-                                                   Text="⚠  Global dedup with multiple in-place files isn't supported — output will be a single combined Processed_*.xlsx file instead. Source files won't be touched." />
-                                    </Border>
-
                                     <!-- Sheet structure -->
                                     <TextBlock Margin="0,16,0,6" Style="{StaticResource LabelText}" Text="SHEET STRUCTURE" />
                                     <StackPanel>
