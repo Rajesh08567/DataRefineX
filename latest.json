@@ -1,6 +1,6 @@
 {
-  "version": "1.2.0",
-  "url": "https://github.com/Rajesh08567/DataRefineX/releases/download/v1.2.0/DataRefineX-v1.2.0.exe",
-  "releaseNotes": "New: 'Don't split / Per sheet / Merged sheets / Separate files' output splitting with configurable rows-per-chunk. New: global dedup across all files & sheets, plus a 'GapReport' sheet listing every key with its source files and which files were missing it. UX: warnings for incompatible option combos (Global + In-place, Split + In-place, Gap report without dedup). Removed legacy sheet-name preset.",
-  "sha256": "245dc6bbcd7fcfe076765a35cc7d35d6eb06c0850128eea787321fb652a8e61c"
+  "version": "1.2.1",
+  "url": "https://github.com/Rajesh08567/datarefinex/releases/download/v1.2.1/DataRefineX-v1.2.1.exe",
+  "releaseNotes": "Fixes the auto-updater so future updates actually replace the running EXE and relaunch (previous helper batch had a syntax bug that aborted the update). Also writes a small drx_update.log in %TEMP% for diagnostics. Includes everything from v1.2.0: output splitting, global dedup, gap report.",
+  "sha256": "aa215ec852d26910b2f90fd30261c3660e16eeb862e432d8a00a57ce53a30878"
 }
