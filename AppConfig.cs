@@ -25,7 +25,7 @@ internal static class AppConfig
     //  Set to null (or empty) to disable auto-update entirely.
     // =====================================================================
     public const string? UpdateManifestUrl =
-        "https://raw.githubusercontent.com/YOUR_USER/DataRefineX/main/latest.json";
+        "https://raw.githubusercontent.com/Rajesh08567/DataRefineX/main/latest.json";
 
     // Delay before the first update check (gives the UI time to settle).
     public static readonly TimeSpan UpdateCheckDelay = TimeSpan.FromSeconds(3);

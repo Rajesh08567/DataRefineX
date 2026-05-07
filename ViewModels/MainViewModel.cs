@@ -62,6 +62,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             ClearCommand.RaiseCanExecuteChanged();
             OnPropertyChanged(nameof(HasFiles));
             OnPropertyChanged(nameof(QueueEmptyHint));
+            OnPropertyChanged(nameof(GlobalIncompatibleWithInPlace));
         };
 
         _elapsedTimer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
@@ -342,8 +343,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
             OnPropertyChanged();
             OnPropertyChanged(nameof(IsSingleColumnDedup));
             OnPropertyChanged(nameof(IsMultiColumnDedup));
+            OnPropertyChanged(nameof(GapReportNeedsDedup));
         }
     }
+
+    /// <summary>True when user wants gap report but DedupMode=None — gap report would be empty, so we warn in UI.</summary>
+    public bool GapReportNeedsDedup => _writeGapReport && _dedupMode == DedupKeyMode.None;
+
+    /// <summary>True when DedupScope=Global is selected with In-place + multiple files — the processor will fall back to a single combined output.</summary>
+    public bool GlobalIncompatibleWithInPlace =>
+        _dedupScope == DedupScope.Global
+        && _outputDestination == OutputDestination.InPlace
+        && Files.Count > 1;
 
     public bool IsSingleColumnDedup => _dedupMode == DedupKeyMode.SingleColumn;
     public bool IsMultiColumnDedup => _dedupMode == DedupKeyMode.MultipleColumns;
@@ -419,6 +430,71 @@ public sealed class MainViewModel : INotifyPropertyChanged
         set { if (_preserveSourceSheets != value) { _preserveSourceSheets = value; OnPropertyChanged(); } }
     }
 
+    // ---------- Dedup scope + gap report ----------
+
+    private DedupScope _dedupScope = DedupScope.PerSheet;
+    public DedupScope DedupScope
+    {
+        get => _dedupScope;
+        set
+        {
+            if (_dedupScope == value) return;
+            _dedupScope = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsGlobalScope));
+            OnPropertyChanged(nameof(GlobalIncompatibleWithInPlace));
+        }
+    }
+
+    public bool IsGlobalScope => _dedupScope == DedupScope.Global;
+
+    private bool _writeGapReport;
+    public bool WriteGapReport
+    {
+        get => _writeGapReport;
+        set
+        {
+            if (_writeGapReport == value) return;
+            _writeGapReport = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(GapReportNeedsDedup));
+        }
+    }
+
+    // ---------- Output splitting ----------
+
+    private SplitMode _splitMode = SplitMode.None;
+    public SplitMode SplitMode
+    {
+        get => _splitMode;
+        set
+        {
+            if (_splitMode == value) return;
+            _splitMode = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsSplittingEnabled));
+            OnPropertyChanged(nameof(SplitDisabledByInPlace));
+        }
+    }
+
+    public bool IsSplittingEnabled => _splitMode != SplitMode.None;
+
+    /// <summary>True when split is configured but in-place mode is on — split is silently ignored, so we warn the user.</summary>
+    public bool SplitDisabledByInPlace => _splitMode != SplitMode.None && _outputDestination == OutputDestination.InPlace;
+
+    private int _splitSize = 10_000;
+    public int SplitSize
+    {
+        get => _splitSize;
+        set
+        {
+            var clamped = Math.Max(1, value);
+            if (_splitSize == clamped) return;
+            _splitSize = clamped;
+            OnPropertyChanged();
+        }
+    }
+
     // ---------- Output sheet toggles ----------
 
     private bool _writeUniqueSheet = true;
@@ -462,6 +538,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             OnPropertyChanged();
             OnPropertyChanged(nameof(IsInPlace));
             OnPropertyChanged(nameof(IsNewFile));
+            OnPropertyChanged(nameof(SplitDisabledByInPlace));
+            OnPropertyChanged(nameof(GlobalIncompatibleWithInPlace));
         }
     }
 
@@ -621,7 +699,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
             WriteInvalidSheet = WriteInvalidSheet,
             OutputFormat = OutputFormat,
             Destination = OutputDestination,
-            PreserveSourceSheets = PreserveSourceSheets
+            PreserveSourceSheets = PreserveSourceSheets,
+            DedupScope = DedupScope,
+            WriteGapReport = WriteGapReport,
+            SplitMode = SplitMode,
+            SplitSize = SplitSize
         };
 
         try

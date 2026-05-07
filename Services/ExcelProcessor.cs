@@ -60,6 +60,26 @@ public enum OutputDestination
     InPlace
 }
 
+public enum SplitMode
+{
+    /// <summary>Don't split — write everything as-is.</summary>
+    None,
+    /// <summary>Split each output sheet into chunks of N rows. Sheet 'Customers' (25k rows, N=10k) → 'Customers_1', 'Customers_2', 'Customers_3'.</summary>
+    PerSheet,
+    /// <summary>Merge all unique rows, then split into 'Unique_1', 'Unique_2', ... of N rows each.</summary>
+    MergedSheets,
+    /// <summary>Merge all unique rows, then split into separate files: 'Processed_..._1.xlsx', 'Processed_..._2.xlsx'.</summary>
+    SeparateFiles
+}
+
+public enum DedupScope
+{
+    /// <summary>Dedup within each source sheet independently (default — preserves per-sheet structure).</summary>
+    PerSheet,
+    /// <summary>Dedup globally — a key seen anywhere in any file/sheet only appears once. Useful for merging multiple lists.</summary>
+    Global
+}
+
 public sealed class ProcessingOptions
 {
     public SheetSelectionMode SheetMode { get; init; } = SheetSelectionMode.All;
@@ -94,6 +114,18 @@ public sealed class ProcessingOptions
     /// <summary>If true, dedup matching is case-sensitive (e.g. 'Foo' and 'foo' are different). Default false (case-insensitive — typical for emails, usernames, etc.).</summary>
     public bool CaseSensitive { get; init; } = false;
     public int MaxDegreeOfParallelism { get; init; } = Math.Max(2, Environment.ProcessorCount);
+
+    /// <summary>How to split large output. Default None = no splitting.</summary>
+    public SplitMode SplitMode { get; init; } = SplitMode.None;
+    /// <summary>Max rows per output chunk when SplitMode != None. Min 1, default 10000.</summary>
+    public int SplitSize { get; init; } = 10_000;
+
+    /// <summary>Dedup scope — per-sheet (default) or global across all files+sheets.</summary>
+    public DedupScope DedupScope { get; init; } = DedupScope.PerSheet;
+
+    /// <summary>When true (and DedupScope=Global), emit an extra 'GapReport' sheet listing each unique key and the source files/sheets it appeared in.</summary>
+    public bool WriteGapReport { get; init; } = false;
+    public string GapReportSheetName { get; init; } = "GapReport";
 }
 
 public sealed class ExcelProcessor
@@ -112,7 +144,18 @@ public sealed class ExcelProcessor
         Action<LogLevel, string> log,
         CancellationToken cancellationToken)
     {
-        // In-place writes operate per-file (dedup within each file independently).
+        // Global dedup needs ONE shared key set across every file — per-file processing would defeat the purpose.
+        // So global+in-place+multi-file falls back to combined processing (single merged output) and warns.
+        if (options.DedupScope == DedupScope.Global
+            && options.Destination == OutputDestination.InPlace
+            && files.Count > 1)
+        {
+            log(LogLevel.Warning,
+                "Global dedup is incompatible with 'Same file (overwrite source)' for multiple files — switching to a single combined output instead. Source files are NOT modified.");
+            return await ProcessCombinedAsync(files, options, progress, log, cancellationToken);
+        }
+
+        // In-place writes (per-sheet scope) operate per-file — dedup within each file independently.
         if (options.Destination == OutputDestination.InPlace && files.Count > 1)
         {
             return await ProcessPerFileAsync(files, options, progress, log, cancellationToken);
@@ -178,7 +221,15 @@ public sealed class ExcelProcessor
             }
 
             log(LogLevel.Info, $"Starting processing of {files.Count} file(s) with {options.MaxDegreeOfParallelism} workers.");
-            log(LogLevel.Info, $"Sheet mode: {options.SheetMode} • Dedup: {DescribeDedup(options)} • Validation: {options.Validation}");
+            log(LogLevel.Info, $"Sheet mode: {options.SheetMode} • Dedup: {DescribeDedup(options)} • Scope: {options.DedupScope} • Validation: {options.Validation}");
+            if (options.SplitMode != SplitMode.None)
+            {
+                log(LogLevel.Info, $"Output split: {options.SplitMode} every {options.SplitSize:N0} rows.");
+            }
+            if (options.DedupScope == DedupScope.Global && options.WriteGapReport)
+            {
+                log(LogLevel.Info, "Gap report enabled — output will include a 'GapReport' sheet showing per-key file presence.");
+            }
 
             var totalRowsRead = 0L;
             var duplicatesRemoved = 0L;
@@ -197,6 +248,11 @@ public sealed class ExcelProcessor
             var uniquePerSheet = new ConcurrentDictionary<string, ConcurrentBag<Dictionary<string, object?>>>(StringComparer.OrdinalIgnoreCase);
             var duplicatesPerSheet = new ConcurrentDictionary<string, ConcurrentBag<Dictionary<string, object?>>>(StringComparer.OrdinalIgnoreCase);
             var invalidPerSheet = new ConcurrentDictionary<string, ConcurrentBag<Dictionary<string, object?>>>(StringComparer.OrdinalIgnoreCase);
+
+            // Gap report: for each unique key, track every (file, sheet) it was seen in.
+            // Only built when DedupScope=Global AND WriteGapReport=true.
+            var keyOccurrences = new ConcurrentDictionary<string, ConcurrentBag<string>>(StringComparer.OrdinalIgnoreCase);
+            var buildGapReport = options.DedupScope == DedupScope.Global && options.WriteGapReport && options.DedupMode != DedupKeyMode.None;
 
             // Preserve the order in which sheets are first encountered, so output sheets keep load order.
             var sheetOrder = new List<string>();
@@ -262,9 +318,15 @@ public sealed class ExcelProcessor
                                 : sheet)
                             : options.UniqueSheetName;
 
-                        var seenForBucket = options.PreserveSourceSheets
-                            ? seenKeysPerSheet.GetOrAdd(bucketKey, _ => new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase))
-                            : seenKeysGlobal;
+                        // Global dedup forces one shared set across all files+sheets, regardless of PreserveSourceSheets.
+                        var seenForBucket = options.DedupScope == DedupScope.Global
+                            ? seenKeysGlobal
+                            : (options.PreserveSourceSheets
+                                ? seenKeysPerSheet.GetOrAdd(bucketKey, _ => new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase))
+                                : seenKeysGlobal);
+
+                        // Tag for the gap report (e.g. "MyFile.xlsx › Customers").
+                        var occurrenceTag = $"{file.FileName} › {(string.IsNullOrEmpty(sheet) ? Path.GetFileNameWithoutExtension(file.FullPath) : sheet)}";
 
                         var uniqueBag = uniquePerSheet.GetOrAdd(bucketKey, _ => new ConcurrentBag<Dictionary<string, object?>>());
 
@@ -337,19 +399,30 @@ public sealed class ExcelProcessor
                                     }
 
                                     // Dedup — empty dedup keys are kept in the unique bag (no dedup applies).
+                                    string? dedupKey = null;
                                     if (options.DedupMode != DedupKeyMode.None)
                                     {
-                                        var key = BuildDedupKey(rowToProcess, options);
-                                        if (!string.IsNullOrEmpty(key))
+                                        dedupKey = BuildDedupKey(rowToProcess, options);
+                                        if (!string.IsNullOrEmpty(dedupKey))
                                         {
-                                            if (!seenForBucket.TryAdd(key, 0))
+                                            if (!seenForBucket.TryAdd(dedupKey, 0))
                                             {
+                                                // Still record the occurrence so the gap report shows EVERY file the key was seen in.
+                                                if (buildGapReport)
+                                                {
+                                                    keyOccurrences.GetOrAdd(dedupKey, _ => new ConcurrentBag<string>()).Add(occurrenceTag);
+                                                }
                                                 Interlocked.Increment(ref duplicatesRemoved);
                                                 var dupBag = duplicatesPerSheet.GetOrAdd(bucketKey, _ => new ConcurrentBag<Dictionary<string, object?>>());
                                                 dupBag.Add(rowToProcess);
                                                 continue;
                                             }
                                         }
+                                    }
+
+                                    if (buildGapReport && !string.IsNullOrEmpty(dedupKey))
+                                    {
+                                        keyOccurrences.GetOrAdd(dedupKey, _ => new ConcurrentBag<string>()).Add(occurrenceTag);
                                     }
 
                                     uniqueBag.Add(rowToProcess);
@@ -450,6 +523,9 @@ public sealed class ExcelProcessor
                     : $"{basePath}.xlsx";
             }
 
+            string outputFile = primaryOutputFile;
+            var extraOutputFiles = new List<string>();
+
             await Task.Run(() =>
             {
                 var srcExt = isInPlace ? Path.GetExtension(files[0].FullPath).ToLowerInvariant() : "";
@@ -463,104 +539,35 @@ public sealed class ExcelProcessor
                         .ToList();
                 }
 
-                if (writeAsCsv)
+                // Splitting is disabled in in-place mode — overwriting source with N split files would be confusing.
+                var effectiveSplit = isInPlace ? SplitMode.None : options.SplitMode;
+                var splitSize = Math.Max(1, options.SplitSize);
+
+                // Build the gap report rows once (used by both XLSX and CSV branches).
+                List<Dictionary<string, object?>>? gapRows = null;
+                if (buildGapReport && keyOccurrences.Count > 0)
                 {
-                    // CSV is single-table per file. With preserved sheets, each input sheet becomes its own csv file.
-                    if (options.WriteUniqueSheet || isInPlace)
-                    {
-                        if (isInPlace && uniquePerSheet.Count == 1)
-                        {
-                            // Single source CSV — overwrite it directly.
-                            var only = uniquePerSheet.Values.First();
-                            MiniExcel.SaveAs(primaryOutputFile,
-                                NormalizeRows(only, finalColumns).ToList(),
-                                excelType: MiniExcelLibs.ExcelType.CSV, overwriteFile: true);
-                        }
-                        else
-                        {
-                            foreach (var sheetName in orderedSheetKeys)
-                            {
-                                if (!uniquePerSheet.TryGetValue(sheetName, out var bag)) continue;
-                                var path = uniquePerSheet.Count > 1
-                                    ? $"{basePath}_{SanitizeFilename(sheetName)}.csv"
-                                    : (options.WriteDuplicatesSheet || options.WriteInvalidSheet
-                                        ? $"{basePath}_{options.UniqueSheetName}.csv"
-                                        : primaryOutputFile);
-                                MiniExcel.SaveAs(path,
-                                    NormalizeRows(bag, finalColumns).ToList(),
-                                    excelType: MiniExcelLibs.ExcelType.CSV, overwriteFile: true);
-                            }
-                        }
-                    }
-                    if (options.WriteDuplicatesSheet)
-                    {
-                        var mergedDup = FlattenWithSource(duplicatesPerSheet, orderedSheetKeys);
-                        MiniExcel.SaveAs($"{basePath}_{options.DuplicatesSheetName}.csv",
-                            NormalizeRowsWithSource(mergedDup, finalColumns),
-                            excelType: MiniExcelLibs.ExcelType.CSV, overwriteFile: true);
-                    }
-                    if (options.WriteInvalidSheet)
-                    {
-                        var mergedInv = FlattenWithSource(invalidPerSheet, orderedSheetKeys);
-                        MiniExcel.SaveAs($"{basePath}_{options.InvalidSheetName}.csv",
-                            NormalizeRowsWithSource(mergedInv, finalColumns, includeReason: true),
-                            excelType: MiniExcelLibs.ExcelType.CSV, overwriteFile: true);
-                    }
+                    gapRows = BuildGapReportRows(keyOccurrences, files);
                 }
-                else
-                {
-                    var sheets = new Dictionary<string, object>();
 
-                    if (options.WriteUniqueSheet || isInPlace)
-                    {
-                        if (options.PreserveSourceSheets && uniquePerSheet.Count > 0)
-                        {
-                            // One output sheet per input sheet, in the order they were loaded.
-                            foreach (var sheetName in orderedSheetKeys)
-                            {
-                                if (!uniquePerSheet.TryGetValue(sheetName, out var bag)) continue;
-                                var safeName = SanitizeSheetName(sheetName, sheets.Keys);
-                                sheets[safeName] = NormalizeRows(bag, finalColumns).ToList();
-                            }
-                        }
-                        else
-                        {
-                            // Merge everything into one sheet — preserve load order across sheets.
-                            var merged = orderedSheetKeys
-                                .Where(k => uniquePerSheet.ContainsKey(k))
-                                .SelectMany(k => uniquePerSheet[k]);
-                            sheets[options.UniqueSheetName] = NormalizeRows(merged, finalColumns).ToList();
-                        }
-                    }
+                var writeResult = writeAsCsv
+                    ? WriteCsvOutput(
+                        primaryOutputFile, basePath, options, isInPlace, effectiveSplit, splitSize,
+                        uniquePerSheet, duplicatesPerSheet, invalidPerSheet,
+                        orderedSheetKeys, finalColumns, gapRows)
+                    : WriteXlsxOutput(
+                        primaryOutputFile, basePath, options, isInPlace, effectiveSplit, splitSize,
+                        uniquePerSheet, duplicatesPerSheet, invalidPerSheet,
+                        orderedSheetKeys, finalColumns, gapRows);
 
-                    // Duplicates and Invalid always merge into single named sheets — cleaner output.
-                    // A "_Source" column is added so users can trace the original sheet of each row.
-                    // Invalid sheet additionally gets a "_Reason" column explaining why each row was rejected.
-                    if (options.WriteDuplicatesSheet)
-                    {
-                        var mergedDup = FlattenWithSource(duplicatesPerSheet, orderedSheetKeys);
-                        sheets[options.DuplicatesSheetName] = NormalizeRowsWithSource(mergedDup, finalColumns);
-                    }
-
-                    if (options.WriteInvalidSheet)
-                    {
-                        var mergedInv = FlattenWithSource(invalidPerSheet, orderedSheetKeys);
-                        sheets[options.InvalidSheetName] = NormalizeRowsWithSource(mergedInv, finalColumns, includeReason: true);
-                    }
-
-                    if (sheets.Count == 0)
-                    {
-                        var merged = orderedSheetKeys
-                            .Where(k => uniquePerSheet.ContainsKey(k))
-                            .SelectMany(k => uniquePerSheet[k]);
-                        sheets[options.UniqueSheetName] = NormalizeRows(merged, finalColumns).ToList();
-                    }
-
-                    MiniExcel.SaveAs(primaryOutputFile, sheets, overwriteFile: true);
-                }
+                outputFile = writeResult.PrimaryFile;
+                extraOutputFiles.AddRange(writeResult.ExtraFiles);
             }, cancellationToken);
 
-            var outputFile = primaryOutputFile;
+            if (extraOutputFiles.Count > 0)
+            {
+                log(LogLevel.Info, $"Split output: {1 + extraOutputFiles.Count} files written.");
+            }
 
             sw.Stop();
 
@@ -1017,5 +1024,340 @@ public sealed class ExcelProcessor
 
         var rx = "^" + Regex.Escape(pattern).Replace("\\*", ".*") + "$";
         return Regex.IsMatch(sheetName, rx, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    // ---------------- Split + gap report helpers ----------------
+
+    private readonly record struct WriteResult(string PrimaryFile, IReadOnlyList<string> ExtraFiles);
+
+    private static IEnumerable<List<T>> Chunk<T>(IEnumerable<T> source, int size)
+    {
+        if (size <= 0) size = 1;
+        var chunk = new List<T>(size);
+        foreach (var item in source)
+        {
+            chunk.Add(item);
+            if (chunk.Count >= size)
+            {
+                yield return chunk;
+                chunk = new List<T>(size);
+            }
+        }
+        if (chunk.Count > 0) yield return chunk;
+    }
+
+    private static List<Dictionary<string, object?>> BuildGapReportRows(
+        ConcurrentDictionary<string, ConcurrentBag<string>> keyOccurrences,
+        IReadOnlyList<FileItem> files)
+    {
+        // Header columns for the gap report:
+        //   Key | OccurrenceCount | Files | MissingFromFiles
+        // Files = comma-separated list of "FileName › Sheet" tags where the key was seen.
+        // MissingFromFiles = files in the input set that DID NOT contain this key (the "gap").
+        var allFileNames = new HashSet<string>(files.Select(f => f.FileName), StringComparer.OrdinalIgnoreCase);
+
+        var rows = new List<Dictionary<string, object?>>(keyOccurrences.Count);
+        foreach (var (key, bag) in keyOccurrences.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            var occurrences = bag.ToList();
+            var distinctOccurrences = occurrences.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var seenFiles = new HashSet<string>(
+                distinctOccurrences.Select(o =>
+                {
+                    var sep = o.IndexOf(" › ", StringComparison.Ordinal);
+                    return sep > 0 ? o.Substring(0, sep) : o;
+                }),
+                StringComparer.OrdinalIgnoreCase);
+            var missing = allFileNames.Where(f => !seenFiles.Contains(f)).OrderBy(s => s, StringComparer.OrdinalIgnoreCase);
+
+            rows.Add(new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["Key"] = key,
+                ["OccurrenceCount"] = occurrences.Count,
+                ["Files"] = string.Join("; ", distinctOccurrences.OrderBy(s => s, StringComparer.OrdinalIgnoreCase)),
+                ["MissingFromFiles"] = string.Join("; ", missing)
+            });
+        }
+        return rows;
+    }
+
+    private static WriteResult WriteXlsxOutput(
+        string primaryOutputFile,
+        string basePath,
+        ProcessingOptions options,
+        bool isInPlace,
+        SplitMode splitMode,
+        int splitSize,
+        ConcurrentDictionary<string, ConcurrentBag<Dictionary<string, object?>>> uniquePerSheet,
+        ConcurrentDictionary<string, ConcurrentBag<Dictionary<string, object?>>> duplicatesPerSheet,
+        ConcurrentDictionary<string, ConcurrentBag<Dictionary<string, object?>>> invalidPerSheet,
+        IReadOnlyList<string> orderedSheetKeys,
+        List<string> finalColumns,
+        List<Dictionary<string, object?>>? gapRows)
+    {
+        var extras = new List<string>();
+
+        // Build duplicate/invalid sheets once — they don't get split (audit data).
+        List<Dictionary<string, object?>>? duplicateRows = null;
+        List<Dictionary<string, object?>>? invalidRows = null;
+        if (options.WriteDuplicatesSheet)
+        {
+            duplicateRows = NormalizeRowsWithSource(
+                FlattenWithSource(duplicatesPerSheet, orderedSheetKeys), finalColumns);
+        }
+        if (options.WriteInvalidSheet)
+        {
+            invalidRows = NormalizeRowsWithSource(
+                FlattenWithSource(invalidPerSheet, orderedSheetKeys), finalColumns, includeReason: true);
+        }
+
+        // SeparateFiles split: each chunk is its own .xlsx file containing one Unique sheet (+ duplicates/invalid copied to first file only).
+        if (splitMode == SplitMode.SeparateFiles)
+        {
+            var wantUnique = options.WriteUniqueSheet || isInPlace;
+
+            // If user disabled the unique sheet, splitting it makes no sense — emit a single audit-only file.
+            if (!wantUnique)
+            {
+                var auditSheets = new Dictionary<string, object>();
+                if (duplicateRows is not null) auditSheets[options.DuplicatesSheetName] = duplicateRows;
+                if (invalidRows is not null) auditSheets[options.InvalidSheetName] = invalidRows;
+                if (gapRows is not null) auditSheets[options.GapReportSheetName] = gapRows;
+                if (auditSheets.Count == 0) auditSheets[options.UniqueSheetName] = new List<Dictionary<string, object?>>();
+                MiniExcel.SaveAs(primaryOutputFile, auditSheets, overwriteFile: true);
+                return new WriteResult(primaryOutputFile, extras);
+            }
+
+            var merged = orderedSheetKeys
+                .Where(k => uniquePerSheet.ContainsKey(k))
+                .SelectMany(k => uniquePerSheet[k]);
+
+            var chunks = Chunk(merged, splitSize).ToList();
+            if (chunks.Count == 0) chunks.Add(new List<Dictionary<string, object?>>());
+
+            string firstFile = primaryOutputFile;
+            for (var i = 0; i < chunks.Count; i++)
+            {
+                var path = chunks.Count == 1
+                    ? primaryOutputFile
+                    : $"{basePath}_part{i + 1:D2}.xlsx";
+
+                var sheets = new Dictionary<string, object>
+                {
+                    [options.UniqueSheetName] = NormalizeRows(chunks[i], finalColumns).ToList()
+                };
+                // Duplicates / invalid / gap report only in the FIRST file — keeps audit data in one place.
+                if (i == 0)
+                {
+                    if (duplicateRows is not null) sheets[options.DuplicatesSheetName] = duplicateRows;
+                    if (invalidRows is not null) sheets[options.InvalidSheetName] = invalidRows;
+                    if (gapRows is not null) sheets[options.GapReportSheetName] = gapRows;
+                }
+
+                MiniExcel.SaveAs(path, sheets, overwriteFile: true);
+                if (i == 0) firstFile = path;
+                else extras.Add(path);
+            }
+            return new WriteResult(firstFile, extras);
+        }
+
+        // Single-file output (None / PerSheet / MergedSheets).
+        var allSheets = new Dictionary<string, object>();
+
+        if (options.WriteUniqueSheet || isInPlace)
+        {
+            if (splitMode == SplitMode.MergedSheets)
+            {
+                var merged = orderedSheetKeys
+                    .Where(k => uniquePerSheet.ContainsKey(k))
+                    .SelectMany(k => uniquePerSheet[k]);
+                var chunks = Chunk(merged, splitSize).ToList();
+                if (chunks.Count == 0) chunks.Add(new List<Dictionary<string, object?>>());
+                for (var i = 0; i < chunks.Count; i++)
+                {
+                    var name = chunks.Count == 1
+                        ? options.UniqueSheetName
+                        : $"{options.UniqueSheetName}_{i + 1}";
+                    var safe = SanitizeSheetName(name, allSheets.Keys);
+                    allSheets[safe] = NormalizeRows(chunks[i], finalColumns).ToList();
+                }
+            }
+            else if (splitMode == SplitMode.PerSheet && options.PreserveSourceSheets)
+            {
+                foreach (var sheetName in orderedSheetKeys)
+                {
+                    if (!uniquePerSheet.TryGetValue(sheetName, out var bag)) continue;
+                    var chunks = Chunk(bag, splitSize).ToList();
+                    if (chunks.Count == 0) chunks.Add(new List<Dictionary<string, object?>>());
+                    for (var i = 0; i < chunks.Count; i++)
+                    {
+                        var name = chunks.Count == 1 ? sheetName : $"{sheetName}_{i + 1}";
+                        var safe = SanitizeSheetName(name, allSheets.Keys);
+                        allSheets[safe] = NormalizeRows(chunks[i], finalColumns).ToList();
+                    }
+                }
+            }
+            else
+            {
+                // None (or PerSheet without PreserveSourceSheets — falls back to no split).
+                if (options.PreserveSourceSheets && uniquePerSheet.Count > 0)
+                {
+                    foreach (var sheetName in orderedSheetKeys)
+                    {
+                        if (!uniquePerSheet.TryGetValue(sheetName, out var bag)) continue;
+                        var safe = SanitizeSheetName(sheetName, allSheets.Keys);
+                        allSheets[safe] = NormalizeRows(bag, finalColumns).ToList();
+                    }
+                }
+                else
+                {
+                    var merged = orderedSheetKeys
+                        .Where(k => uniquePerSheet.ContainsKey(k))
+                        .SelectMany(k => uniquePerSheet[k]);
+                    allSheets[options.UniqueSheetName] = NormalizeRows(merged, finalColumns).ToList();
+                }
+            }
+        }
+
+        if (duplicateRows is not null) allSheets[options.DuplicatesSheetName] = duplicateRows;
+        if (invalidRows is not null) allSheets[options.InvalidSheetName] = invalidRows;
+        if (gapRows is not null) allSheets[options.GapReportSheetName] = gapRows;
+
+        if (allSheets.Count == 0)
+        {
+            var merged = orderedSheetKeys
+                .Where(k => uniquePerSheet.ContainsKey(k))
+                .SelectMany(k => uniquePerSheet[k]);
+            allSheets[options.UniqueSheetName] = NormalizeRows(merged, finalColumns).ToList();
+        }
+
+        MiniExcel.SaveAs(primaryOutputFile, allSheets, overwriteFile: true);
+        return new WriteResult(primaryOutputFile, extras);
+    }
+
+    private static WriteResult WriteCsvOutput(
+        string primaryOutputFile,
+        string basePath,
+        ProcessingOptions options,
+        bool isInPlace,
+        SplitMode splitMode,
+        int splitSize,
+        ConcurrentDictionary<string, ConcurrentBag<Dictionary<string, object?>>> uniquePerSheet,
+        ConcurrentDictionary<string, ConcurrentBag<Dictionary<string, object?>>> duplicatesPerSheet,
+        ConcurrentDictionary<string, ConcurrentBag<Dictionary<string, object?>>> invalidPerSheet,
+        IReadOnlyList<string> orderedSheetKeys,
+        List<string> finalColumns,
+        List<Dictionary<string, object?>>? gapRows)
+    {
+        var extras = new List<string>();
+        string firstFile = primaryOutputFile;
+        var firstAssigned = false;
+
+        void Track(string path)
+        {
+            if (!firstAssigned) { firstFile = path; firstAssigned = true; }
+            else extras.Add(path);
+        }
+
+        // Splitting writes one CSV per chunk regardless of mode (CSV is single-table).
+        if (options.WriteUniqueSheet || isInPlace)
+        {
+            if (isInPlace && uniquePerSheet.Count == 1 && splitMode == SplitMode.None)
+            {
+                var only = uniquePerSheet.Values.First();
+                MiniExcel.SaveAs(primaryOutputFile,
+                    NormalizeRows(only, finalColumns).ToList(),
+                    excelType: MiniExcelLibs.ExcelType.CSV, overwriteFile: true);
+                Track(primaryOutputFile);
+            }
+            else if (splitMode == SplitMode.PerSheet)
+            {
+                foreach (var sheetName in orderedSheetKeys)
+                {
+                    if (!uniquePerSheet.TryGetValue(sheetName, out var bag)) continue;
+                    var chunks = Chunk(bag, splitSize).ToList();
+                    if (chunks.Count == 0) chunks.Add(new List<Dictionary<string, object?>>());
+                    for (var i = 0; i < chunks.Count; i++)
+                    {
+                        var safe = SanitizeFilename(sheetName);
+                        var path = chunks.Count == 1
+                            ? $"{basePath}_{safe}.csv"
+                            : $"{basePath}_{safe}_{i + 1:D2}.csv";
+                        MiniExcel.SaveAs(path,
+                            NormalizeRows(chunks[i], finalColumns).ToList(),
+                            excelType: MiniExcelLibs.ExcelType.CSV, overwriteFile: true);
+                        Track(path);
+                    }
+                }
+            }
+            else if (splitMode == SplitMode.MergedSheets || splitMode == SplitMode.SeparateFiles)
+            {
+                var merged = orderedSheetKeys
+                    .Where(k => uniquePerSheet.ContainsKey(k))
+                    .SelectMany(k => uniquePerSheet[k]);
+                var chunks = Chunk(merged, splitSize).ToList();
+                if (chunks.Count == 0) chunks.Add(new List<Dictionary<string, object?>>());
+                for (var i = 0; i < chunks.Count; i++)
+                {
+                    var path = chunks.Count == 1
+                        ? $"{basePath}_{options.UniqueSheetName}.csv"
+                        : $"{basePath}_{options.UniqueSheetName}_{i + 1:D2}.csv";
+                    MiniExcel.SaveAs(path,
+                        NormalizeRows(chunks[i], finalColumns).ToList(),
+                        excelType: MiniExcelLibs.ExcelType.CSV, overwriteFile: true);
+                    Track(path);
+                }
+            }
+            else
+            {
+                // SplitMode.None: original per-sheet CSV behavior.
+                foreach (var sheetName in orderedSheetKeys)
+                {
+                    if (!uniquePerSheet.TryGetValue(sheetName, out var bag)) continue;
+                    var path = uniquePerSheet.Count > 1
+                        ? $"{basePath}_{SanitizeFilename(sheetName)}.csv"
+                        : (options.WriteDuplicatesSheet || options.WriteInvalidSheet
+                            ? $"{basePath}_{options.UniqueSheetName}.csv"
+                            : primaryOutputFile);
+                    MiniExcel.SaveAs(path,
+                        NormalizeRows(bag, finalColumns).ToList(),
+                        excelType: MiniExcelLibs.ExcelType.CSV, overwriteFile: true);
+                    Track(path);
+                }
+            }
+        }
+
+        if (options.WriteDuplicatesSheet)
+        {
+            var path = $"{basePath}_{options.DuplicatesSheetName}.csv";
+            var mergedDup = FlattenWithSource(duplicatesPerSheet, orderedSheetKeys);
+            MiniExcel.SaveAs(path,
+                NormalizeRowsWithSource(mergedDup, finalColumns),
+                excelType: MiniExcelLibs.ExcelType.CSV, overwriteFile: true);
+            Track(path);
+        }
+        if (options.WriteInvalidSheet)
+        {
+            var path = $"{basePath}_{options.InvalidSheetName}.csv";
+            var mergedInv = FlattenWithSource(invalidPerSheet, orderedSheetKeys);
+            MiniExcel.SaveAs(path,
+                NormalizeRowsWithSource(mergedInv, finalColumns, includeReason: true),
+                excelType: MiniExcelLibs.ExcelType.CSV, overwriteFile: true);
+            Track(path);
+        }
+        if (gapRows is not null)
+        {
+            var path = $"{basePath}_{options.GapReportSheetName}.csv";
+            MiniExcel.SaveAs(path, gapRows,
+                excelType: MiniExcelLibs.ExcelType.CSV, overwriteFile: true);
+            Track(path);
+        }
+
+        if (!firstAssigned)
+        {
+            // Defensive fallback — should be unreachable.
+            firstFile = primaryOutputFile;
+        }
+        return new WriteResult(firstFile, extras);
     }
 }
