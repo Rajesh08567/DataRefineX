@@ -63,41 +63,67 @@ public static class UpdateInstaller
     private static string WriteHelperBatch(string srcPath, string targetPath, string oldPath)
     {
         // The batch:
-        //  1) waits long enough for the current process to fully exit
+        //  1) waits a few seconds + retries the move so the parent process has time to exit and release file locks
         //  2) moves the downloaded EXE into the target folder (overwrites if same name)
         //  3) deletes the old EXE if its path differs from the new one
         //  4) relaunches the new EXE
         //  5) deletes itself
         // NOTE: srcPath may equal targetPath if already placed correctly; handle gracefully.
+        // NOTE: do NOT use %~nx<envvar> — the ~ path-operator only works on command-line params and for-loop vars.
+        var logPath = Path.Combine(Path.GetTempPath(), "drx_update.log");
         var batch = $@"@echo off
 setlocal
 set ""SRC={srcPath}""
 set ""DST={targetPath}""
 set ""OLD={oldPath}""
+set ""LOG={logPath}""
 
-REM Wait up to ~10s for the current process to release file locks.
-for /L %%i in (1,1,10) do (
-    >nul 2>&1 (ren ""%OLD%"" ""%~nxOLD%.lock"" && ren ""%OLD%.lock"" ""%~nxOLD%"")
-    if not errorlevel 1 goto :ready
-    timeout /t 1 /nobreak > NUL
-)
-:ready
+echo [%DATE% %TIME%] update helper started >> ""%LOG%""
+echo   SRC=%SRC% >> ""%LOG%""
+echo   DST=%DST% >> ""%LOG%""
+echo   OLD=%OLD% >> ""%LOG%""
 
-REM Move the downloaded EXE into place (no-op if SRC==DST).
-if /i not ""%SRC%""==""%DST%"" (
-    move /Y ""%SRC%"" ""%DST%"" > NUL 2>&1
-)
+REM Initial wait so the parent process has time to exit and release locks.
+timeout /t 2 /nobreak > NUL
 
-REM Delete the old EXE if it isn't the same path as the new one.
+REM Try to delete the old exe up to ~10 times — succeeds once locks are released.
+REM This is harmless if OLD==DST (we'll overwrite with move below either way).
 if /i not ""%OLD%""==""%DST%"" (
-    if exist ""%OLD%"" del /Q ""%OLD%"" > NUL 2>&1
+    for /L %%i in (1,1,10) do (
+        if exist ""%OLD%"" (
+            del /Q ""%OLD%"" > NUL 2>&1
+            if not exist ""%OLD%"" goto :deleted_old
+            timeout /t 1 /nobreak > NUL
+        ) else (
+            goto :deleted_old
+        )
+    )
 )
+:deleted_old
+echo [%DATE% %TIME%] old delete attempt done >> ""%LOG%""
+
+REM Move the downloaded EXE into place (no-op if SRC==DST). Retry up to 10 times.
+if /i not ""%SRC%""==""%DST%"" (
+    for /L %%i in (1,1,10) do (
+        move /Y ""%SRC%"" ""%DST%"" >> ""%LOG%"" 2>&1
+        if exist ""%DST%"" goto :moved
+        timeout /t 1 /nobreak > NUL
+    )
+) else (
+    goto :moved
+)
+echo [%DATE% %TIME%] ERROR: move failed after retries >> ""%LOG%""
+goto :end
+:moved
+echo [%DATE% %TIME%] move ok >> ""%LOG%""
 
 REM Launch the new version.
 start """" ""%DST%""
+echo [%DATE% %TIME%] launched new version >> ""%LOG%""
 
+:end
 REM Self-delete.
-del /Q ""%~f0"" > NUL 2>&1
+(del /Q ""%~f0"" > NUL 2>&1) & exit /b 0
 endlocal
 ";
 
