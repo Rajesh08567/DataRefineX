@@ -1,6 +1,6 @@
 {
-  "version": "1.2.1",
-  "url": "https://github.com/Rajesh08567/DataRefineX/releases/download/v1.2.1/DataRefineX-v1.2.1.exe",
-  "releaseNotes": "Fixes the auto-updater so future updates actually replace the running EXE and relaunch (previous helper batch had a syntax bug that aborted the update). Also writes a small drx_update.log in %TEMP% for diagnostics. Includes everything from v1.2.0: output splitting, global dedup, gap report.",
-  "sha256": "aa215ec852d26910b2f90fd30261c3660e16eeb862e432d8a00a57ce53a30878"
+  "version": "1.2.2",
+  "url": "https://github.com/Rajesh08567/DataRefineX/releases/download/v1.2.2/DataRefineX-v1.2.2.exe",
+  "releaseNotes": "Auto-updater test build. No functional changes.",
+  "sha256": "8a462e6a1cb43a532b0daf36e483049fa98e8903927c8a7ca991ca719aa79944"
 }
