@@ -1,6 +1,6 @@
 {
-  "version": "1.2.2",
-  "url": "https://github.com/Rajesh08567/DataRefineX/releases/download/v1.2.2/DataRefineX-v1.2.2.exe",
-  "releaseNotes": "Auto-updater test build. No functional changes.",
-  "sha256": "8a462e6a1cb43a532b0daf36e483049fa98e8903927c8a7ca991ca719aa79944"
+  "version": "1.2.3",
+  "url": "https://github.com/Rajesh08567/DataRefineX/releases/download/v1.2.3/DataRefineX-v1.2.3.exe",
+  "releaseNotes": "Removes DEDUP SCOPE feature (dedup is now always per-sheet by default, simpler UI). Keeps all v1.2.1/1.2.2 fixes and features: split output, auto-updater fix.",
+  "sha256": "749c14d109729c6d4fd13864544ffc3a27d807fcde8ec4a43281ead128201a03"
 }
