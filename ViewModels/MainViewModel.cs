@@ -476,6 +476,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
         set { if (_writeInvalidSheet != value) { _writeInvalidSheet = value; OnPropertyChanged(); } }
     }
 
+    private bool _includeFilters;
+    public bool IncludeFilters
+    {
+        get => _includeFilters;
+        set { if (_includeFilters != value) { _includeFilters = value; OnPropertyChanged(); } }
+    }
+
     // ---------- Output format ----------
 
     private OutputFormat _outputFormat = OutputFormat.Xlsx;
@@ -658,7 +665,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             Destination = OutputDestination,
             PreserveSourceSheets = PreserveSourceSheets,
             SplitMode = SplitMode,
-            SplitSize = SplitSize
+            SplitSize = SplitSize,
+            IncludeFilters = IncludeFilters
         };
 
         try
