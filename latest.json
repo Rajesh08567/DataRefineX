@@ -1,6 +1,6 @@
 {
-  "version": "1.2.4",
-  "url": "https://github.com/Rajesh08567/DataRefineX/releases/download/v1.2.4/DataRefineX-v1.2.4.exe",
-  "releaseNotes": "Fixes output xlsx so third-party tools (PhpSpreadsheet, email validators, etc.) can read the data without needing to open and resave in Excel first. Also: header filter dropdowns are now off by default (toggle under WHAT TO INCLUDE).",
-  "sha256": "27fc77f57e61c79d141eed5940d1ea4a1bcae392f6df06b2e0ff769c21ab644f"
+  "version": "1.2.5",
+  "url": "https://github.com/Rajesh08567/DataRefineX/releases/download/v1.2.5/DataRefineX-v1.2.5.exe",
+  "releaseNotes": "Strips UTF-8 BOM from all xml parts in output xlsx. v1.2.4 only fixed the cell-type issue (t=\"str\" → t=\"s\") but MiniExcel was still writing [Content_Types].xml, workbook.xml, and styles.xml with a leading BOM that strict OOXML parsers (PhpSpreadsheet, libxml2-based email validators) reject before they even reach the cell data. v1.2.5 strips the BOM from every .xml/.rels part so the file is fully spec-compliant.",
+  "sha256": "28a0cc8e55cc95daae32bd4302e96cde44040f0128c4c27cd88ecad27dede915"
 }

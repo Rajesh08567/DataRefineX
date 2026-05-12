@@ -995,45 +995,97 @@ public sealed class ExcelProcessor
     }
 
     // MiniExcel 1.x writes every string cell as inline `t="str"` (formula-result type) with empty
-    // sharedStrings.xml. Strict XLSX parsers (most email validators, NeverBounce, ZeroBounce, etc.)
-    // treat t="str" as formula output and skip those cells — the file looks empty to them. Excel
-    // resave fixes it by migrating to the shared strings table. This post-pass does the same migration
-    // ourselves so users don't have to open-and-resave every output.
+    // sharedStrings.xml AND writes [Content_Types].xml / xl/workbook.xml / xl/styles.xml with a
+    // UTF-8 BOM before the XML declaration. Strict OOXML parsers (PhpSpreadsheet, libxml2) reject
+    // the file outright: they parse [Content_Types].xml first and choke on EF BB BF before <?xml,
+    // OR they read t="str" cells as null. Excel resave fixes both because it rewrites everything.
+    //
+    // This post-pass does two things:
+    //   1) Strip the UTF-8 BOM from every .xml part in the zip.
+    //   2) Migrate t="str" cells in worksheets to t="s" with proper sharedStrings entries.
     private static void NormalizeXlsxSharedStrings(string xlsxPath)
     {
         try
         {
             if (!File.Exists(xlsxPath)) return;
 
+            // ---- Pass 1: read everything ----
             var strings = new List<string>();
             var stringIndex = new Dictionary<string, int>(StringComparer.Ordinal);
             var sheetRewrites = new Dictionary<string, string>(StringComparer.Ordinal);
-            var anyRewrites = false;
+            var bomFiles = new List<string>();
+            var anyChanges = false;
 
             using (var zip = ZipFile.Open(xlsxPath, ZipArchiveMode.Read))
             {
                 foreach (var entry in zip.Entries)
                 {
-                    if (!entry.FullName.StartsWith("xl/worksheets/sheet", StringComparison.Ordinal) ||
-                        !entry.FullName.EndsWith(".xml", StringComparison.Ordinal))
-                        continue;
-
-                    string xml;
-                    using (var sr = new StreamReader(entry.Open(), Encoding.UTF8))
-                        xml = sr.ReadToEnd();
-
-                    var rewritten = RewriteSheetInlineStrings(xml, strings, stringIndex, out var changed);
-                    if (changed)
+                    // Detect BOM on every .xml / .rels part — they must NOT have one per OOXML spec.
+                    if (entry.FullName.EndsWith(".xml", StringComparison.Ordinal) ||
+                        entry.FullName.EndsWith(".rels", StringComparison.Ordinal))
                     {
-                        sheetRewrites[entry.FullName] = rewritten;
-                        anyRewrites = true;
+                        using var bs = entry.Open();
+                        var first3 = new byte[3];
+                        var read = bs.Read(first3, 0, 3);
+                        if (read == 3 && first3[0] == 0xEF && first3[1] == 0xBB && first3[2] == 0xBF)
+                        {
+                            bomFiles.Add(entry.FullName);
+                            anyChanges = true;
+                        }
+                    }
+
+                    // Convert t="str" cells in worksheet xml.
+                    if (entry.FullName.StartsWith("xl/worksheets/sheet", StringComparison.Ordinal) &&
+                        entry.FullName.EndsWith(".xml", StringComparison.Ordinal))
+                    {
+                        string xml;
+                        using (var sr = new StreamReader(entry.Open(), Encoding.UTF8))
+                            xml = sr.ReadToEnd();
+
+                        var rewritten = RewriteSheetInlineStrings(xml, strings, stringIndex, out var changed);
+                        if (changed)
+                        {
+                            sheetRewrites[entry.FullName] = rewritten;
+                            anyChanges = true;
+                        }
                     }
                 }
             }
 
-            if (!anyRewrites) return;
+            if (!anyChanges) return;
 
+            // ---- Pass 2: rewrite ----
             using var zipWrite = ZipFile.Open(xlsxPath, ZipArchiveMode.Update);
+
+            // 2a) Strip BOM from every offending entry.
+            foreach (var entryName in bomFiles)
+            {
+                var entry = zipWrite.GetEntry(entryName);
+                if (entry is null) continue;
+                byte[] bytes;
+                using (var es = entry.Open())
+                using (var ms = new MemoryStream())
+                {
+                    es.CopyTo(ms);
+                    bytes = ms.ToArray();
+                }
+                // Strip leading EF BB BF.
+                if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
+                {
+                    var stripped = new byte[bytes.Length - 3];
+                    Array.Copy(bytes, 3, stripped, 0, stripped.Length);
+                    bytes = stripped;
+                }
+                // Don't double-write if this entry is also being replaced by sheet-rewrite — skip,
+                // sheet pass writes a fresh BOM-free copy below.
+                if (sheetRewrites.ContainsKey(entryName)) continue;
+                entry.Delete();
+                var fresh = zipWrite.CreateEntry(entryName, CompressionLevel.Optimal);
+                using var ws = fresh.Open();
+                ws.Write(bytes, 0, bytes.Length);
+            }
+
+            // 2b) Replace worksheets with shared-string-migrated content (always BOM-free).
             foreach (var (entryName, newXml) in sheetRewrites)
             {
                 var entry = zipWrite.GetEntry(entryName);
@@ -1044,11 +1096,13 @@ public sealed class ExcelProcessor
                 ws.Write(newXml);
             }
 
-            var sstEntry = zipWrite.GetEntry("xl/sharedStrings.xml");
-            sstEntry?.Delete();
-            var sst = zipWrite.CreateEntry("xl/sharedStrings.xml", CompressionLevel.Optimal);
-            using (var sw = new StreamWriter(sst.Open(), new UTF8Encoding(false)))
+            // 2c) Replace sharedStrings.xml only if we migrated any cells.
+            if (sheetRewrites.Count > 0)
             {
+                var sstEntry = zipWrite.GetEntry("xl/sharedStrings.xml");
+                sstEntry?.Delete();
+                var sst = zipWrite.CreateEntry("xl/sharedStrings.xml", CompressionLevel.Optimal);
+                using var sw = new StreamWriter(sst.Open(), new UTF8Encoding(false));
                 sw.Write(BuildSharedStringsXml(strings));
             }
         }
