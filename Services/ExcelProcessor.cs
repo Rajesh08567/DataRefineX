@@ -4,6 +4,7 @@ using System.IO;
 using System.Text.RegularExpressions;
 using DataRefineX.Models;
 using MiniExcelLibs;
+using MiniExcelLibs.OpenXml;
 
 namespace DataRefineX.Services;
 
@@ -111,6 +112,9 @@ public sealed class ProcessingOptions
     public SplitMode SplitMode { get; init; } = SplitMode.None;
     /// <summary>Max rows per output chunk when SplitMode != None. Min 1, default 10000.</summary>
     public int SplitSize { get; init; } = 10_000;
+
+    /// <summary>When true, output xlsx sheets get header filter dropdowns (Excel Table styling). Off by default — most users don't want them.</summary>
+    public bool IncludeFilters { get; init; } = false;
 }
 
 public sealed class ExcelProcessor
@@ -1001,6 +1005,13 @@ public sealed class ExcelProcessor
         List<string> finalColumns)
     {
         var extras = new List<string>();
+        // MiniExcel defaults each sheet to an Excel Table (TableStyleMedium2 + AutoFilter),
+        // which shows filter dropdowns on every column header. Only enable when the user asks for it.
+        var xlsxConfig = new OpenXmlConfiguration
+        {
+            TableStyles = options.IncludeFilters ? TableStyles.Default : TableStyles.None,
+            AutoFilter = options.IncludeFilters
+        };
 
         // Build duplicate/invalid sheets once — they don't get split (audit data).
         List<Dictionary<string, object?>>? duplicateRows = null;
@@ -1028,7 +1039,7 @@ public sealed class ExcelProcessor
                 if (duplicateRows is not null) auditSheets[options.DuplicatesSheetName] = duplicateRows;
                 if (invalidRows is not null) auditSheets[options.InvalidSheetName] = invalidRows;
                 if (auditSheets.Count == 0) auditSheets[options.UniqueSheetName] = new List<Dictionary<string, object?>>();
-                MiniExcel.SaveAs(primaryOutputFile, auditSheets, overwriteFile: true);
+                MiniExcel.SaveAs(primaryOutputFile, auditSheets, overwriteFile: true, configuration: xlsxConfig);
                 return new WriteResult(primaryOutputFile, extras);
             }
 
@@ -1057,7 +1068,7 @@ public sealed class ExcelProcessor
                     if (invalidRows is not null) sheets[options.InvalidSheetName] = invalidRows;
                 }
 
-                MiniExcel.SaveAs(path, sheets, overwriteFile: true);
+                MiniExcel.SaveAs(path, sheets, overwriteFile: true, configuration: xlsxConfig);
                 if (i == 0) firstFile = path;
                 else extras.Add(path);
             }
@@ -1133,7 +1144,7 @@ public sealed class ExcelProcessor
             allSheets[options.UniqueSheetName] = NormalizeRows(merged, finalColumns).ToList();
         }
 
-        MiniExcel.SaveAs(primaryOutputFile, allSheets, overwriteFile: true);
+        MiniExcel.SaveAs(primaryOutputFile, allSheets, overwriteFile: true, configuration: xlsxConfig);
         return new WriteResult(primaryOutputFile, extras);
     }
 

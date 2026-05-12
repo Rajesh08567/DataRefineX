@@ -47,7 +47,7 @@ Built with WPF on .NET 8 and [MiniExcel](https://github.com/mini-software/MiniEx
 |---|---|---|
 | Destination | `New file`, `Same file (overwrite source)` | In-place is destructive — backup first. |
 | Keep original sheet names | checkbox | On: each input sheet → its own output sheet. Off: merge into one `Unique` sheet. |
-| What to include | `Unique`, `Duplicates removed`, `Invalid / empty` | Each becomes its own sheet (or CSV file). |
+| What to include | `Unique`, `Duplicates removed`, `Invalid / empty`, `Header filter dropdowns` | First three become their own sheet (or CSV file). `Header filter dropdowns` is off by default — turn on to get Excel's filter arrows on each output sheet's header row. |
 | File format | `XLSX`, `CSV` | Only when `Destination = New file`. In-place follows the source extension. |
 | Split output | `Don't split`, `Per sheet`, `Merged sheets`, `Separate files` | Combine with **Rows per chunk** (default 10000). Splitting is disabled in in-place mode. |
 

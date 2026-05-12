@@ -1,6 +1,6 @@
 {
-  "version": "1.2.3",
-  "url": "https://github.com/Rajesh08567/DataRefineX/releases/download/v1.2.3/DataRefineX-v1.2.3.exe",
-  "releaseNotes": "Removes DEDUP SCOPE feature (dedup is now always per-sheet by default, simpler UI). Keeps all v1.2.1/1.2.2 fixes and features: split output, auto-updater fix.",
-  "sha256": "749c14d109729c6d4fd13864544ffc3a27d807fcde8ec4a43281ead128201a03"
+  "version": "1.2.5",
+  "url": "https://github.com/Rajesh08567/DataRefineX/releases/download/v1.2.5/DataRefineX-v1.2.5.exe",
+  "releaseNotes": "Important: rolls back the experimental xlsx post-pass that shipped in v1.2.4 — it caused empty results when uploading to some email validators. Keeps the new 'Header filter dropdowns' checkbox (default off) under WHAT TO INCLUDE. xlsx output format is otherwise identical to v1.2.3, the version that historically worked with all validators.",
+  "sha256": "a4c73e07d4203f7ba38130da0f4bd6ab7992e26301f4729289ef2123308ff510"
 }
