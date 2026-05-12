@@ -576,9 +576,6 @@
                                         <CheckBox Margin="0,0,0,6" Content="Invalid / empty"
                                                   ToolTip="Rows that failed validation (bad email, empty key column, etc.)."
                                                   IsChecked="{Binding WriteInvalidSheet}" />
-                                        <CheckBox Margin="0,0,0,6" Content="Header filter dropdowns"
-                                                  ToolTip="ON: each output sheet gets Excel's filter arrows on the header row.&#x0a;OFF (default): plain headers, no dropdowns."
-                                                  IsChecked="{Binding IncludeFilters}" />
                                     </StackPanel>
 
                                     <!-- Format -->

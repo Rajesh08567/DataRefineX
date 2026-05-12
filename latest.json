@@ -1,6 +1,6 @@
 {
-  "version": "1.2.5",
-  "url": "https://github.com/Rajesh08567/DataRefineX/releases/download/v1.2.5/DataRefineX-v1.2.5.exe",
-  "releaseNotes": "Strips UTF-8 BOM from all xml parts in output xlsx. v1.2.4 only fixed the cell-type issue (t=\"str\" → t=\"s\") but MiniExcel was still writing [Content_Types].xml, workbook.xml, and styles.xml with a leading BOM that strict OOXML parsers (PhpSpreadsheet, libxml2-based email validators) reject before they even reach the cell data. v1.2.5 strips the BOM from every .xml/.rels part so the file is fully spec-compliant.",
-  "sha256": "28a0cc8e55cc95daae32bd4302e96cde44040f0128c4c27cd88ecad27dede915"
+  "version": "1.2.3",
+  "url": "https://github.com/Rajesh08567/DataRefineX/releases/download/v1.2.3/DataRefineX-v1.2.3.exe",
+  "releaseNotes": "Removes DEDUP SCOPE feature (dedup is now always per-sheet by default, simpler UI). Keeps all v1.2.1/1.2.2 fixes and features: split output, auto-updater fix.",
+  "sha256": "749c14d109729c6d4fd13864544ffc3a27d807fcde8ec4a43281ead128201a03"
 }
