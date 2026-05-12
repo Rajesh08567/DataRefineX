@@ -1,9 +1,13 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
+using System.Text;
 using System.Text.RegularExpressions;
+using System.Xml;
 using DataRefineX.Models;
 using MiniExcelLibs;
+using MiniExcelLibs.OpenXml;
 
 namespace DataRefineX.Services;
 
@@ -111,6 +115,9 @@ public sealed class ProcessingOptions
     public SplitMode SplitMode { get; init; } = SplitMode.None;
     /// <summary>Max rows per output chunk when SplitMode != None. Min 1, default 10000.</summary>
     public int SplitSize { get; init; } = 10_000;
+
+    /// <summary>When true, output xlsx sheets get header filter dropdowns (Excel Table styling). Off by default — most users don't want them.</summary>
+    public bool IncludeFilters { get; init; } = false;
 }
 
 public sealed class ExcelProcessor
@@ -987,6 +994,173 @@ public sealed class ExcelProcessor
         if (chunk.Count > 0) yield return chunk;
     }
 
+    // MiniExcel 1.x writes every string cell as inline `t="str"` (formula-result type) with empty
+    // sharedStrings.xml. Strict XLSX parsers (most email validators, NeverBounce, ZeroBounce, etc.)
+    // treat t="str" as formula output and skip those cells — the file looks empty to them. Excel
+    // resave fixes it by migrating to the shared strings table. This post-pass does the same migration
+    // ourselves so users don't have to open-and-resave every output.
+    private static void NormalizeXlsxSharedStrings(string xlsxPath)
+    {
+        try
+        {
+            if (!File.Exists(xlsxPath)) return;
+
+            var strings = new List<string>();
+            var stringIndex = new Dictionary<string, int>(StringComparer.Ordinal);
+            var sheetRewrites = new Dictionary<string, string>(StringComparer.Ordinal);
+            var anyRewrites = false;
+
+            using (var zip = ZipFile.Open(xlsxPath, ZipArchiveMode.Read))
+            {
+                foreach (var entry in zip.Entries)
+                {
+                    if (!entry.FullName.StartsWith("xl/worksheets/sheet", StringComparison.Ordinal) ||
+                        !entry.FullName.EndsWith(".xml", StringComparison.Ordinal))
+                        continue;
+
+                    string xml;
+                    using (var sr = new StreamReader(entry.Open(), Encoding.UTF8))
+                        xml = sr.ReadToEnd();
+
+                    var rewritten = RewriteSheetInlineStrings(xml, strings, stringIndex, out var changed);
+                    if (changed)
+                    {
+                        sheetRewrites[entry.FullName] = rewritten;
+                        anyRewrites = true;
+                    }
+                }
+            }
+
+            if (!anyRewrites) return;
+
+            using var zipWrite = ZipFile.Open(xlsxPath, ZipArchiveMode.Update);
+            foreach (var (entryName, newXml) in sheetRewrites)
+            {
+                var entry = zipWrite.GetEntry(entryName);
+                if (entry is null) continue;
+                entry.Delete();
+                var fresh = zipWrite.CreateEntry(entryName, CompressionLevel.Optimal);
+                using var ws = new StreamWriter(fresh.Open(), new UTF8Encoding(false));
+                ws.Write(newXml);
+            }
+
+            var sstEntry = zipWrite.GetEntry("xl/sharedStrings.xml");
+            sstEntry?.Delete();
+            var sst = zipWrite.CreateEntry("xl/sharedStrings.xml", CompressionLevel.Optimal);
+            using (var sw = new StreamWriter(sst.Open(), new UTF8Encoding(false)))
+            {
+                sw.Write(BuildSharedStringsXml(strings));
+            }
+        }
+        catch
+        {
+            // Post-processing is best-effort. If anything goes wrong (locked file, malformed xml,
+            // unexpected schema), leave the MiniExcel output untouched — it still opens in Excel.
+        }
+    }
+
+    private static string RewriteSheetInlineStrings(
+        string sheetXml,
+        List<string> strings,
+        Dictionary<string, int> stringIndex,
+        out bool changed)
+    {
+        changed = false;
+        var doc = new XmlDocument { PreserveWhitespace = false };
+        try { doc.LoadXml(sheetXml); }
+        catch { return sheetXml; }
+
+        var ns = new XmlNamespaceManager(doc.NameTable);
+        const string mainNs = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+        ns.AddNamespace("x", mainNs);
+
+        var cells = doc.SelectNodes("//x:c[@t='str']", ns);
+        if (cells is null || cells.Count == 0) return sheetXml;
+
+        foreach (XmlNode cell in cells)
+        {
+            // Skip if cell has a formula — t="str" is legitimate there.
+            if (cell.SelectSingleNode("x:f", ns) is not null) continue;
+
+            var vNode = cell.SelectSingleNode("x:v", ns);
+            if (vNode is null) continue;
+
+            var value = vNode.InnerText ?? "";
+
+            if (!stringIndex.TryGetValue(value, out var idx))
+            {
+                idx = strings.Count;
+                strings.Add(value);
+                stringIndex[value] = idx;
+            }
+
+            var attrs = cell.Attributes!;
+            var tAttr = attrs["t"]!;
+            tAttr.Value = "s";
+
+            vNode.InnerText = idx.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            changed = true;
+        }
+
+        if (!changed) return sheetXml;
+
+        // StringWriter is UTF-16; using a MemoryStream + UTF-8 writer keeps the declaration honest
+        // so strict parsers don't trip on a utf-16 declaration in a file we'll write as UTF-8 bytes.
+        using var ms = new MemoryStream();
+        using (var xw = XmlWriter.Create(ms, new XmlWriterSettings
+        {
+            OmitXmlDeclaration = false,
+            Indent = false,
+            Encoding = new UTF8Encoding(false)
+        }))
+        {
+            doc.Save(xw);
+        }
+        return Encoding.UTF8.GetString(ms.ToArray());
+    }
+
+    private static string BuildSharedStringsXml(IReadOnlyList<string> strings)
+    {
+        var sb = new StringBuilder();
+        sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
+        sb.Append("<sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ");
+        sb.Append($"count=\"{strings.Count}\" uniqueCount=\"{strings.Count}\">");
+        foreach (var s in strings)
+        {
+            sb.Append("<si><t");
+            // Preserve leading/trailing whitespace, which strict readers otherwise collapse.
+            if (s.Length > 0 && (char.IsWhiteSpace(s[0]) || char.IsWhiteSpace(s[s.Length - 1])))
+                sb.Append(" xml:space=\"preserve\"");
+            sb.Append('>');
+            sb.Append(XmlEscape(s));
+            sb.Append("</t></si>");
+        }
+        sb.Append("</sst>");
+        return sb.ToString();
+    }
+
+    private static string XmlEscape(string s)
+    {
+        var sb = new StringBuilder(s.Length);
+        foreach (var c in s)
+        {
+            switch (c)
+            {
+                case '&': sb.Append("&amp;"); break;
+                case '<': sb.Append("&lt;"); break;
+                case '>': sb.Append("&gt;"); break;
+                case '"': sb.Append("&quot;"); break;
+                case '\'': sb.Append("&apos;"); break;
+                default:
+                    // Strip control chars that are illegal in XML 1.0 (except tab/lf/cr).
+                    if (c < 0x20 && c != '\t' && c != '\n' && c != '\r') continue;
+                    sb.Append(c);
+                    break;
+            }
+        }
+        return sb.ToString();
+    }
+
     private static WriteResult WriteXlsxOutput(
         string primaryOutputFile,
         string basePath,
@@ -1001,6 +1175,13 @@ public sealed class ExcelProcessor
         List<string> finalColumns)
     {
         var extras = new List<string>();
+        // MiniExcel defaults each sheet to an Excel Table (TableStyleMedium2 + AutoFilter),
+        // which shows filter dropdowns on every column header. Only enable when the user asks for it.
+        var xlsxConfig = new OpenXmlConfiguration
+        {
+            TableStyles = options.IncludeFilters ? TableStyles.Default : TableStyles.None,
+            AutoFilter = options.IncludeFilters
+        };
 
         // Build duplicate/invalid sheets once — they don't get split (audit data).
         List<Dictionary<string, object?>>? duplicateRows = null;
@@ -1028,7 +1209,8 @@ public sealed class ExcelProcessor
                 if (duplicateRows is not null) auditSheets[options.DuplicatesSheetName] = duplicateRows;
                 if (invalidRows is not null) auditSheets[options.InvalidSheetName] = invalidRows;
                 if (auditSheets.Count == 0) auditSheets[options.UniqueSheetName] = new List<Dictionary<string, object?>>();
-                MiniExcel.SaveAs(primaryOutputFile, auditSheets, overwriteFile: true);
+                MiniExcel.SaveAs(primaryOutputFile, auditSheets, overwriteFile: true, configuration: xlsxConfig);
+                NormalizeXlsxSharedStrings(primaryOutputFile);
                 return new WriteResult(primaryOutputFile, extras);
             }
 
@@ -1057,7 +1239,8 @@ public sealed class ExcelProcessor
                     if (invalidRows is not null) sheets[options.InvalidSheetName] = invalidRows;
                 }
 
-                MiniExcel.SaveAs(path, sheets, overwriteFile: true);
+                MiniExcel.SaveAs(path, sheets, overwriteFile: true, configuration: xlsxConfig);
+                NormalizeXlsxSharedStrings(path);
                 if (i == 0) firstFile = path;
                 else extras.Add(path);
             }
@@ -1133,7 +1316,8 @@ public sealed class ExcelProcessor
             allSheets[options.UniqueSheetName] = NormalizeRows(merged, finalColumns).ToList();
         }
 
-        MiniExcel.SaveAs(primaryOutputFile, allSheets, overwriteFile: true);
+        MiniExcel.SaveAs(primaryOutputFile, allSheets, overwriteFile: true, configuration: xlsxConfig);
+        NormalizeXlsxSharedStrings(primaryOutputFile);
         return new WriteResult(primaryOutputFile, extras);
     }
 

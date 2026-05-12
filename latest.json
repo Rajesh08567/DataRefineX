@@ -1,6 +1,6 @@
 {
-  "version": "1.2.3",
-  "url": "https://github.com/Rajesh08567/DataRefineX/releases/download/v1.2.3/DataRefineX-v1.2.3.exe",
-  "releaseNotes": "Removes DEDUP SCOPE feature (dedup is now always per-sheet by default, simpler UI). Keeps all v1.2.1/1.2.2 fixes and features: split output, auto-updater fix.",
-  "sha256": "749c14d109729c6d4fd13864544ffc3a27d807fcde8ec4a43281ead128201a03"
+  "version": "1.2.4",
+  "url": "https://github.com/Rajesh08567/DataRefineX/releases/download/v1.2.4/DataRefineX-v1.2.4.exe",
+  "releaseNotes": "Fixes output xlsx so third-party tools (PhpSpreadsheet, email validators, etc.) can read the data without needing to open and resave in Excel first. Also: header filter dropdowns are now off by default (toggle under WHAT TO INCLUDE).",
+  "sha256": "27fc77f57e61c79d141eed5940d1ea4a1bcae392f6df06b2e0ff769c21ab644f"
 }
